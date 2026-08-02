@@ -1,0 +1,15 @@
+{
+  "name": "copilot-stash2d",
+  "description": "Create portable, human-readable archives of Copilot CLI sessions and apply them to new sessions.",
+  "version": "0.1.0",
+  "license": "GPL-3.0-only",
+  "keywords": [
+    "archive",
+    "copilot-cli",
+    "handoff",
+    "sessions"
+  ],
+  "extensions": [
+    "extensions/"
+  ]
+}

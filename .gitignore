@@ -1,0 +1,11 @@
+# Local Stash2D archives
+????-??-?? ??.??.?? - copilot-stash2d - */
+
+# Node.js development artifacts
+node_modules/
+coverage/
+npm-debug.log*
+
+# Editor and OS metadata
+.DS_Store
+Thumbs.db
