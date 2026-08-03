@@ -2,14 +2,20 @@
   "name": "copilot-stash2d",
   "description": "Create portable, human-readable archives of Copilot CLI sessions and apply them to new sessions.",
   "version": "0.1.0",
+  "author": {
+    "name": "Dan Shapiro",
+    "email": "dan@ev0lut1on.com"
+  },
+  "homepage": "https://github.com/DanEShapiro/copilot-stash2d",
+  "repository": "https://github.com/DanEShapiro/copilot-stash2d.git",
   "license": "GPL-3.0-only",
   "keywords": [
     "archive",
     "copilot-cli",
     "handoff",
-    "sessions"
+    "sessions",
+    "productivity"
   ],
-  "extensions": [
-    "extensions/"
-  ]
+  "extensions": "./extensions/",
+  "postInstallMessage": "Copilot Stash2D installed. If its commands are unavailable, run /experimental on and restart Copilot."
 }

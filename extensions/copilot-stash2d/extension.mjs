@@ -1,3 +1,6 @@
+// Extension: copilot-stash2d
+// Saves and applies portable, human-readable Copilot CLI session archives.
+
 import { joinSession } from "@github/copilot-sdk/extension";
 import { createCommands } from "../../src/commands.mjs";
 

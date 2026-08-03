@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -60,7 +61,7 @@ test("discovers external files but excludes files in Git repositories", async (t
   );
 
   assert.equal(candidates.length, 1);
-  assert.equal(candidates[0].resolvedPath, external);
+  assert.equal(candidates[0].resolvedPath, await realpath(external));
 });
 
 test("excludes Copilot internals and the active session workspace", async (t) => {
@@ -87,7 +88,7 @@ test("excludes Copilot internals and the active session workspace", async (t) =>
 
   assert.deepEqual(
     candidates.map((candidate) => candidate.resolvedPath),
-    [externalFile],
+    [await realpath(externalFile)],
   );
 });
 

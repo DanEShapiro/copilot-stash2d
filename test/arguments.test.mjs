@@ -8,7 +8,7 @@ import {
 
 test("tokenizes quoted paths and escaped quotes", () => {
   assert.deepEqual(
-    tokenizeArguments('"C:\\\\My Files\\\\session.md" "A \\"title\\""'),
+    tokenizeArguments('"C:\\My Files\\session.md" "A \\"title\\""'),
     ["C:\\My Files\\session.md", 'A "title"'],
   );
 });

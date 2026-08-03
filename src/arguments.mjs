@@ -5,7 +5,9 @@ export function tokenizeArguments(input) {
   let escaping = false;
   let started = false;
 
-  for (const character of String(input ?? "")) {
+  const value = String(input ?? "");
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
     if (escaping) {
       token += character;
       escaping = false;
@@ -13,7 +15,12 @@ export function tokenizeArguments(input) {
       continue;
     }
     if (character === "\\" && quote !== "'") {
-      escaping = true;
+      const next = value[index + 1];
+      if (next === "\\" || next === quote || (!quote && next && /\s/.test(next))) {
+        escaping = true;
+      } else {
+        token += character;
+      }
       started = true;
       continue;
     }

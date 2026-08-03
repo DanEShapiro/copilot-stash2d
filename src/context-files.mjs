@@ -16,26 +16,30 @@ export function copilotInternalRoots({
   homeDirectory = os.homedir(),
   platform = process.platform,
 } = {}) {
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
   const roots = new Set([
-    env.COPILOT_HOME || path.join(homeDirectory, ".copilot"),
+    env.COPILOT_HOME || platformPath.join(homeDirectory, ".copilot"),
   ]);
 
   if (env.COPILOT_CACHE_HOME) {
     roots.add(env.COPILOT_CACHE_HOME);
   } else if (platform === "darwin") {
-    roots.add(path.join(homeDirectory, "Library", "Caches", "copilot"));
+    roots.add(platformPath.join(homeDirectory, "Library", "Caches", "copilot"));
   } else if (platform === "win32" && env.LOCALAPPDATA) {
-    roots.add(path.join(env.LOCALAPPDATA, "copilot"));
+    roots.add(platformPath.join(env.LOCALAPPDATA, "copilot"));
   } else {
     roots.add(
-      path.join(env.XDG_CACHE_HOME || path.join(homeDirectory, ".cache"), "copilot"),
+      platformPath.join(
+        env.XDG_CACHE_HOME || platformPath.join(homeDirectory, ".cache"),
+        "copilot",
+      ),
     );
   }
 
   if (env.COPILOT_PLUGIN_DATA) {
     roots.add(env.COPILOT_PLUGIN_DATA);
   }
-  return [...roots].map((root) => path.resolve(root));
+  return [...roots].map((root) => platformPath.resolve(root));
 }
 
 function cleanCandidate(value) {
@@ -106,10 +110,22 @@ export async function discoverExternalContextFiles(
   { excludedRoots = [] } = {},
 ) {
   const sourceRealPath = sourcePath ? await realpath(sourcePath) : undefined;
-  const ignoredRoots = [
+  const configuredRoots = [
     ...copilotInternalRoots(),
-    ...excludedRoots.filter(Boolean).map((root) => path.resolve(root)),
+    ...excludedRoots.filter(Boolean),
   ];
+  const ignoredRoots = await Promise.all(
+    configuredRoots.map(async (root) => {
+      try {
+        return await realpath(root);
+      } catch (error) {
+        if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+          return path.resolve(root);
+        }
+        throw error;
+      }
+    }),
+  );
   const candidates = [];
   const seen = new Set();
 
