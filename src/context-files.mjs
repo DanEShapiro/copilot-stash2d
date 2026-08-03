@@ -115,10 +115,32 @@ export async function discoverExternalContextFiles(
   {
     excludedRoots = [],
     classifyGitRoot = gitRootFor,
+    resolveRealPath = realpath,
+    getFileInfo = stat,
     onWarning = async () => {},
   } = {},
 ) {
-  const sourceRealPath = sourcePath ? await realpath(sourcePath) : undefined;
+  const warnings = new Set();
+  async function warnOnce(key, message) {
+    if (!warnings.has(key)) {
+      warnings.add(key);
+      await onWarning(message);
+    }
+  }
+
+  let sourceRealPath;
+  if (sourcePath) {
+    try {
+      sourceRealPath = await resolveRealPath(sourcePath);
+    } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+        await warnOnce(
+          `source:${error?.code ?? error?.message}`,
+          `The source transcript path could not be resolved and will not be used for external-file exclusion. ${error.message}`,
+        );
+      }
+    }
+  }
   const configuredRoots = [
     ...copilotInternalRoots(),
     ...excludedRoots.filter(Boolean),
@@ -126,31 +148,37 @@ export async function discoverExternalContextFiles(
   const ignoredRoots = await Promise.all(
     configuredRoots.map(async (root) => {
       try {
-        return await realpath(root);
+        return await resolveRealPath(root);
       } catch (error) {
-        if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
-          return path.resolve(root);
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+          await warnOnce(
+            `root:${error?.code ?? error?.message}`,
+            `An exclusion root could not be resolved; its lexical path will still be excluded. ${error.message}`,
+          );
         }
-        throw error;
+        return path.resolve(root);
       }
     }),
   );
   const candidates = [];
   const seen = new Set();
-  const warnings = new Set();
 
   for (const referencedPath of extractReferencedPaths(markdown)) {
     const absolutePath = path.resolve(referencedPath);
     let resolvedPath;
     let info;
     try {
-      resolvedPath = await realpath(absolutePath);
-      info = await stat(resolvedPath);
+      resolvedPath = await resolveRealPath(absolutePath);
+      info = await getFileInfo(resolvedPath);
     } catch (error) {
       if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
         continue;
       }
-      throw error;
+      await warnOnce(
+        `candidate:${error?.code ?? error?.message}`,
+        `Skipped referenced external files that could not be inspected. ${error.message}`,
+      );
+      continue;
     }
     if (!info.isFile() || resolvedPath === sourceRealPath || seen.has(resolvedPath)) {
       continue;

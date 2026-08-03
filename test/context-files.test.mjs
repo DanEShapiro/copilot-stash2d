@@ -144,3 +144,33 @@ test("skips external files when Git classification is unavailable", async (t) =>
   assert.deepEqual(candidates, []);
   assert.deepEqual(warnings, ["Git unavailable"]);
 });
+
+test("skips inaccessible UNC references instead of aborting discovery", async () => {
+  const warnings = [];
+  const error = Object.assign(
+    new Error(
+      "UNKNOWN: unknown error, realpath '\\\\spocore\\src\\inaccessible.cs'",
+    ),
+    { code: "UNKNOWN" },
+  );
+
+  const candidates = await discoverExternalContextFiles(
+    "Read `\\\\spocore\\src\\inaccessible.cs`.",
+    undefined,
+    {
+      excludedRoots: [],
+      resolveRealPath: async (filePath) => {
+        if (filePath.includes("spocore")) {
+          throw error;
+        }
+        return filePath;
+      },
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.deepEqual(candidates, []);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Skipped referenced external files/);
+  assert.match(warnings[0], /UNKNOWN/);
+});
