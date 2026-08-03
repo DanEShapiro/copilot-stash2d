@@ -16,7 +16,7 @@ export function tokenizeArguments(input) {
     }
     if (character === "\\" && quote !== "'") {
       const next = value[index + 1];
-      if (next === "\\" || next === quote || (!quote && next && /\s/.test(next))) {
+      if (next === quote || (!quote && next && /\s/.test(next))) {
         escaping = true;
       } else {
         token += character;

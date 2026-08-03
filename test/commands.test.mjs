@@ -98,6 +98,58 @@ test("uses one timestamp for the archive name and metadata", async (t) => {
   assert.equal(calls, 1);
 });
 
+test("uses the session's current working directory after cwd changes", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const initialDirectory = path.join(directory, "initial");
+  const currentDirectory = path.join(directory, "current");
+  const session = fakeSession({
+    cwd: initialDirectory,
+    metadataWorkingDirectory: currentDirectory,
+  });
+  const commands = createCommands({
+    session,
+    cwd: initialDirectory,
+    now: () => new Date(FIXED_DATE),
+  });
+
+  await commands.save('--output "." --title "current cwd"');
+
+  const archivePath = path.join(
+    currentDirectory,
+    archiveFolderName("current cwd", FIXED_DATE),
+  );
+  assert.equal(await pathExists(archivePath), true);
+  const metadata = JSON.parse(
+    await readFile(path.join(archivePath, "Metadata.json"), "utf8"),
+  );
+  assert.equal(metadata.workingDirectory, currentDirectory);
+});
+
+test("expands home-relative save paths", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const homeDirectory = path.join(directory, "home");
+  const session = fakeSession({ metadataWorkingDirectory: directory });
+  const commands = createCommands({
+    session,
+    cwd: directory,
+    homeDirectory,
+    now: () => new Date(FIXED_DATE),
+  });
+
+  await commands.save('--output "~/stashes" --title "home path"');
+
+  assert.equal(
+    await pathExists(
+      path.join(
+        homeDirectory,
+        "stashes",
+        archiveFolderName("home path", FIXED_DATE),
+      ),
+    ),
+    true,
+  );
+});
+
 test("uses the generated event transcript to create a plan when none exists", async (t) => {
   const directory = await temporaryDirectory(t);
   const session = fakeSession({
@@ -162,6 +214,26 @@ test("applies an edited archive to a new session as public file context", async 
       (attachment) => attachment.type === "file",
     ),
   );
+});
+
+test("applies home-relative archives from the current session directory", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const homeDirectory = path.join(directory, "home");
+  const currentDirectory = path.join(directory, "current");
+  const archivePath = path.join(homeDirectory, "archives", "saved");
+  await writeText(path.join(archivePath, "Session.md"), "session");
+  await writeText(path.join(archivePath, "Handoff.md"), "handoff");
+  await writeMetadata(archivePath, { formatVersion: 1 });
+  const session = fakeSession({ metadataWorkingDirectory: currentDirectory });
+  const commands = createCommands({
+    session,
+    cwd: path.join(directory, "initial"),
+    homeDirectory,
+  });
+
+  await commands.apply('"~/archives/saved"');
+
+  assert.match(session.sent[0].displayPrompt, /archives[\\/]saved/);
 });
 
 test("copies only explicitly approved external context during save", async (t) => {

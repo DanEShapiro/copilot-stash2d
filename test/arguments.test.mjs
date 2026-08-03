@@ -13,6 +13,20 @@ test("tokenizes quoted paths and escaped quotes", () => {
   );
 });
 
+test("preserves Windows UNC paths", () => {
+  assert.deepEqual(
+    tokenizeArguments('"\\\\server\\share\\archive folder"'),
+    ["\\\\server\\share\\archive folder"],
+  );
+});
+
+test("supports unquoted escaped spaces on POSIX", () => {
+  assert.deepEqual(
+    parseSaveArguments("--output /tmp/archive\\ folder --title work"),
+    { outputDirectory: "/tmp/archive folder", title: "work" },
+  );
+});
+
 test("rejects unterminated quotes", () => {
   assert.throws(
     () => tokenizeArguments('"unfinished'),

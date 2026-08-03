@@ -34,6 +34,13 @@ test("splits colon-joined paths and keeps line-number suffixes usable", () => {
   );
 });
 
+test("extracts Windows UNC paths", () => {
+  assert.deepEqual(
+    extractReferencedPaths("Read `\\\\server\\share\\folder\\input.txt`."),
+    ["\\\\server\\share\\folder\\input.txt"],
+  );
+});
+
 test("identifies Copilot home and cache roots", () => {  assert.deepEqual(
     copilotInternalRoots({
       env: {},
@@ -117,4 +124,23 @@ test("copies approved external context with collision-safe names", async (t) => 
 
   assert.equal(entries[0].archivedPath, "Context/001-input.txt");
   assert.equal(entries[1].archivedPath, "Context/002-input.txt");
+});
+
+test("skips external files when Git classification is unavailable", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const external = path.join(directory, "Downloads", "input.txt");
+  await writeText(external, "external");
+  const warnings = [];
+
+  const candidates = await discoverExternalContextFiles(
+    `Read \`${external}\`.`,
+    undefined,
+    {
+      classifyGitRoot: async () => ({ warning: "Git unavailable" }),
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.deepEqual(candidates, []);
+  assert.deepEqual(warnings, ["Git unavailable"]);
 });

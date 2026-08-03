@@ -47,7 +47,7 @@ function cleanCandidate(value) {
   candidate = candidate.replace(/^file:\/\//, "");
   candidate = candidate.replace(/[),.;:]+$/g, "");
   candidate = candidate.replace(/:(?:\d+)(?::\d+)?$/g, "");
-  if (candidate.startsWith("~/")) {
+  if (candidate.startsWith("~/") || candidate.startsWith("~\\")) {
     candidate = path.join(os.homedir(), candidate.slice(2));
   }
   return candidate;
@@ -55,7 +55,7 @@ function cleanCandidate(value) {
 
 function splitFusedPaths(value) {
   return value
-    .split(/:(?=(?:~\/|\/|[A-Za-z]:[\\/]))/)
+    .split(/:(?=(?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\))/)
     .map((part) => part.trim())
     .filter(Boolean);
 }
@@ -63,9 +63,9 @@ function splitFusedPaths(value) {
 export function extractReferencedPaths(markdown) {
   const values = new Set();
   const patterns = [
-    /`((?:~\/|\/|[A-Za-z]:[\\/])[^`\r\n]+)`/g,
-    /["']((?:~\/|\/|[A-Za-z]:[\\/])[^"'\r\n]+)["']/g,
-    /(?:^|\s)((?:~\/|\/|[A-Za-z]:[\\/])[^\s<>{}\[\]"'`]+)/gm,
+    /`((?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^`\r\n]+)`/g,
+    /["']((?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^"'\r\n]+)["']/g,
+    /(?:^|\s)((?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^\s<>{}\[\]"'`]+)/gm,
   ];
   for (const pattern of patterns) {
     for (const match of markdown.matchAll(pattern)) {
@@ -85,29 +85,38 @@ async function gitRootFor(filePath) {
     const { stdout } = await execFileAsync(
       "git",
       ["-C", path.dirname(filePath), "rev-parse", "--show-toplevel"],
-      { timeout: 5000 },
+      {
+        timeout: 5000,
+        env: { ...process.env, LC_ALL: "C" },
+      },
     );
-    return stdout.trim() || undefined;
+    return { root: stdout.trim() || undefined };
   } catch (error) {
     if (
-      error?.code === 128 ||
       error?.stderr?.includes("not a git repository")
     ) {
-      return undefined;
+      return {};
     }
     if (error?.code === "ENOENT") {
-      throw new Error("git is required to classify referenced files.");
+      return {
+        warning:
+          "Git is unavailable, so referenced external files could not be safely classified and were skipped.",
+      };
     }
-    throw new Error(
-      `Unable to determine whether this file belongs to a Git repository: ${filePath}. ${error.message}`,
-    );
+    return {
+      warning: `Unable to determine whether referenced files belong to a Git repository, so unclassifiable files were skipped. ${error.message}`,
+    };
   }
 }
 
 export async function discoverExternalContextFiles(
   markdown,
   sourcePath,
-  { excludedRoots = [] } = {},
+  {
+    excludedRoots = [],
+    classifyGitRoot = gitRootFor,
+    onWarning = async () => {},
+  } = {},
 ) {
   const sourceRealPath = sourcePath ? await realpath(sourcePath) : undefined;
   const configuredRoots = [
@@ -128,6 +137,7 @@ export async function discoverExternalContextFiles(
   );
   const candidates = [];
   const seen = new Set();
+  const warnings = new Set();
 
   for (const referencedPath of extractReferencedPaths(markdown)) {
     const absolutePath = path.resolve(referencedPath);
@@ -149,8 +159,15 @@ export async function discoverExternalContextFiles(
       continue;
     }
     seen.add(resolvedPath);
-    const gitRoot = await gitRootFor(resolvedPath);
-    if (gitRoot) {
+    const classification = await classifyGitRoot(resolvedPath);
+    if (classification.warning) {
+      if (!warnings.has(classification.warning)) {
+        warnings.add(classification.warning);
+        await onWarning(classification.warning);
+      }
+      continue;
+    }
+    if (classification.root) {
       continue;
     }
     candidates.push({

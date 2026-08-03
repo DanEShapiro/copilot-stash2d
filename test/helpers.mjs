@@ -25,6 +25,13 @@ export function fakeSession(overrides = {}) {
     sent,
     inputRequests,
     workspacePath: overrides.workspacePath,
+    rpc: {
+      metadata: {
+        snapshot: async () => ({
+          workingDirectory: overrides.metadataWorkingDirectory,
+        }),
+      },
+    },
     capabilities: {
       ui: { elicitation: overrides.elicitation ?? true },
     },

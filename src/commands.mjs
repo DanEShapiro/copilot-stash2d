@@ -1,4 +1,5 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -63,27 +64,64 @@ async function sessionSnapshot(session) {
   }
 }
 
-async function repositoryMetadata(context) {
-  if (!context.gitRoot) {
-    return undefined;
+async function currentWorkingDirectory(session, fallback) {
+  try {
+    const snapshot = await session.rpc?.metadata?.snapshot?.();
+    if (snapshot?.workingDirectory) {
+      return snapshot.workingDirectory;
+    }
+  } catch {
+    // Older SDK versions may not expose metadata snapshots.
   }
-  let remote;
+  return fallback;
+}
+
+function expandHomePath(filePath, homeDirectory) {
+  if (filePath === "~") {
+    return homeDirectory;
+  }
+  if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
+    return path.join(homeDirectory, filePath.slice(2));
+  }
+  return filePath;
+}
+
+async function repositoryMetadata(workingDirectory) {
+  let root;
   try {
     const result = await execFileAsync(
       "git",
-      ["-C", context.gitRoot, "remote", "get-url", "origin"],
+      ["-C", workingDirectory, "rev-parse", "--show-toplevel"],
       { timeout: 5000 },
     );
-    remote = result.stdout.trim() || undefined;
+    root = result.stdout.trim() || undefined;
   } catch {
-    remote = undefined;
+    return undefined;
   }
-  return {
-    root: context.gitRoot,
-    remote,
-    branch: context.branch,
-    commit: context.headCommit,
-  };
+
+  async function gitValue(args) {
+    try {
+      const result = await execFileAsync(
+        "git",
+        ["-C", root, ...args],
+        { timeout: 5000 },
+      );
+      return result.stdout.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  try {
+    return {
+      root,
+      remote: await gitValue(["remote", "get-url", "origin"]),
+      branch: await gitValue(["branch", "--show-current"]),
+      commit: await gitValue(["rev-parse", "HEAD"]),
+    };
+  } catch {
+    return { root };
+  }
 }
 
 async function generateDocument(session, prompt, displayPrompt, attachments) {
@@ -169,6 +207,7 @@ function attachmentIfPresent(archivePath, relativePath) {
 export function createCommands({
   session,
   cwd = process.cwd(),
+  homeDirectory = os.homedir(),
   now = () => new Date(),
   cleanupArchive = removeIncompleteArchive,
 } = {}) {
@@ -179,6 +218,7 @@ export function createCommands({
   return {
     async save(rawArguments) {
       let { outputDirectory, title } = parseSaveArguments(rawArguments);
+      const activeCwd = await currentWorkingDirectory(session, cwd);
       const snapshot = await sessionSnapshot(session);
       title ||=
         (await inputIfAvailable(session, "Name this Copilot session archive", {
@@ -191,16 +231,23 @@ export function createCommands({
           "Where should the Copilot Stash2D archive folder be created?",
           {
             title: "Copilot Stash2D",
-            default: cwd,
+            default: activeCwd,
           },
-        )) || cwd;
-      outputDirectory = path.resolve(cwd, outputDirectory);
+        )) || activeCwd;
+      outputDirectory = path.resolve(
+        activeCwd,
+        expandHomePath(outputDirectory, homeDirectory),
+      );
 
       const transcript = renderSessionMarkdown(snapshot.events);
       const candidates = await discoverExternalContextFiles(
         transcript,
         undefined,
-        { excludedRoots: [session.workspacePath] },
+        {
+          excludedRoots: [session.workspacePath],
+          onWarning: (message) =>
+            session.log(message, { level: "warning" }),
+        },
       );
       const contextReview = await chooseExternalFiles(session, candidates);
       if (contextReview.cancelled) {
@@ -289,8 +336,8 @@ export function createCommands({
           createdAt: createdAt.toISOString(),
           sessionSource: "public-session-events",
           sessionEventCount: snapshot.events.length,
-          workingDirectory: snapshot.context.cwd ?? cwd,
-          repository: await repositoryMetadata(snapshot.context),
+          workingDirectory: activeCwd,
+          repository: await repositoryMetadata(activeCwd),
           sessionArtifacts: sessionArtifacts.entries,
           externalContext,
         });
@@ -319,6 +366,7 @@ export function createCommands({
 
     async apply(rawArguments) {
       let archivePath = parseApplyArguments(rawArguments);
+      const activeCwd = await currentWorkingDirectory(session, cwd);
       archivePath ||=
         await inputIfAvailable(session, "Choose a Copilot Stash2D archive folder", {
           title: "Apply Copilot Stash2D archive",
@@ -328,7 +376,10 @@ export function createCommands({
           "Usage: /stash2d-apply <archive-folder>",
         );
       }
-      archivePath = path.resolve(cwd, archivePath);
+      archivePath = path.resolve(
+        activeCwd,
+        expandHomePath(archivePath, homeDirectory),
+      );
       await requireDirectory(archivePath);
       await validateArchive(archivePath);
 
