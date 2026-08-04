@@ -1,7 +1,7 @@
 {
   "name": "copilot-stash2d",
   "description": "Create portable, human-readable archives of Copilot CLI sessions and apply them to new sessions.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Dan Shapiro",
     "email": "dan@ev0lut1on.com"
@@ -17,5 +17,6 @@
     "productivity"
   ],
   "extensions": "./extensions/",
+  "skills": "./skills/",
   "postInstallMessage": "Copilot Stash2D installed. If its commands are unavailable, run /experimental on and restart Copilot."
 }

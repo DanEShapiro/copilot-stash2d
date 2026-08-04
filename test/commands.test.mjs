@@ -71,6 +71,17 @@ test("saves a complete portable archive directly from public events", async (t) 
   assert.equal(metadata.title, "portable work");
   assert.equal("sessionId" in metadata, false);
   assert.equal(metadata.sessionSource, "public-session-events");
+  assert.deepEqual(
+    session.logs
+      .filter((entry) => entry.options.level === "info")
+      .map((entry) => entry.message),
+    [
+      "Copilot Stash2D is reading the public session history.",
+      "Copilot Stash2D is creating the archive files.",
+      "Copilot Stash2D is generating the session handoff.",
+      `Saved portable Copilot archive: ${archivePath}`,
+    ],
+  );
 });
 
 test("uses one timestamp for the archive name and metadata", async (t) => {
@@ -213,6 +224,13 @@ test("applies an edited archive to a new session as public file context", async 
     session.sent[0].attachments.every(
       (attachment) => attachment.type === "file",
     ),
+  );
+  assert.deepEqual(
+    session.logs.map((entry) => entry.message),
+    [
+      `Copilot Stash2D is validating the archive: ${archivePath}`,
+      "Copilot Stash2D is attaching 4 archive file(s).",
+    ],
   );
 });
 

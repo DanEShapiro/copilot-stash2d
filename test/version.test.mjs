@@ -8,4 +8,5 @@ test("runtime version matches plugin manifest", async () => {
     await readFile(new URL("../plugin.json", import.meta.url), "utf8"),
   );
   assert.equal(PLUGIN_VERSION, manifest.version);
+  assert.equal(manifest.skills, "./skills/");
 });

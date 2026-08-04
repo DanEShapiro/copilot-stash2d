@@ -218,6 +218,10 @@ export function createCommands({
   return {
     async save(rawArguments) {
       let { outputDirectory, title } = parseSaveArguments(rawArguments);
+      await session.log(
+        "Copilot Stash2D is reading the public session history.",
+        { level: "info" },
+      );
       const activeCwd = await currentWorkingDirectory(session, cwd);
       const snapshot = await sessionSnapshot(session);
       title ||=
@@ -256,6 +260,10 @@ export function createCommands({
         });
         return;
       }
+      await session.log(
+        "Copilot Stash2D is creating the archive files.",
+        { level: "info" },
+      );
       const createdAt = now();
       await mkdir(outputDirectory, { recursive: true });
       const archivePath = await createArchiveDirectory(
@@ -282,6 +290,10 @@ export function createCommands({
         );
         const sourceAttachments = [fileAttachment(archivePath, "Session.md")];
         if (!sessionArtifacts.hasPlan) {
+          await session.log(
+            "Copilot Stash2D is generating a continuation plan.",
+            { level: "info" },
+          );
           const generatedPlan = await generateDocument(
             session,
             PLAN_PROMPT,
@@ -319,6 +331,10 @@ export function createCommands({
               .split(path.sep)
               .join("/"),
           }));
+        await session.log(
+          "Copilot Stash2D is generating the session handoff.",
+          { level: "info" },
+        );
         const handoff = await generateDocument(
           session,
           HANDOFF_PROMPT,
@@ -380,6 +396,10 @@ export function createCommands({
         activeCwd,
         expandHomePath(archivePath, homeDirectory),
       );
+      await session.log(
+        `Copilot Stash2D is validating the archive: ${archivePath}`,
+        { level: "info" },
+      );
       await requireDirectory(archivePath);
       await validateArchive(archivePath);
 
@@ -407,6 +427,10 @@ export function createCommands({
       ];
 
       try {
+        await session.log(
+          `Copilot Stash2D is attaching ${attachments.length} archive file(s).`,
+          { level: "info" },
+        );
         await session.send({
           prompt: APPLY_PROMPT,
           displayPrompt: `Apply Copilot Stash2D archive: ${archivePath}`,
