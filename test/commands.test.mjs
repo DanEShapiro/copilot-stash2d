@@ -76,9 +76,10 @@ test("saves a complete portable archive directly from public events", async (t) 
       .filter((entry) => entry.options.level === "info")
       .map((entry) => entry.message),
     [
+      "Copilot Stash2D save started. Wait for a saved-path confirmation or error before sending another message or running /stash2d-save again.",
       "Copilot Stash2D is reading the public session history.",
       "Copilot Stash2D is creating the archive files.",
-      "Copilot Stash2D is generating the session handoff.",
+      "Copilot Stash2D is generating the session handoff. This can take up to 3 minutes; do not send another message or rerun the command.",
       `Saved portable Copilot archive: ${archivePath}`,
     ],
   );
@@ -366,6 +367,59 @@ test("reports a friendly error for a duplicate archive destination", async (t) =
   await assert.rejects(
     commands.save(`--output "${directory}" --title "duplicate"`),
     /Archive destination already exists/,
+  );
+});
+
+test("does not start a second save while document generation is active", async (t) => {
+  const directory = await temporaryDirectory(t);
+  let releaseGeneration;
+  let generationStarted;
+  const generationGate = new Promise((resolve) => {
+    releaseGeneration = resolve;
+  });
+  const started = new Promise((resolve) => {
+    generationStarted = resolve;
+  });
+  const session = fakeSession({
+    sendAndWait: async (message) => {
+      generationStarted();
+      await generationGate;
+      return {
+        data: {
+          content:
+            message.displayPrompt === "SessionState/plan.md"
+              ? "# Plan"
+              : "# Handoff",
+        },
+      };
+    },
+  });
+  const commands = createCommands({
+    session,
+    cwd: directory,
+    now: () => new Date(FIXED_DATE),
+  });
+
+  const firstSave = commands.save(
+    `--output "${directory}" --title "single flight"`,
+  );
+  await started;
+  await commands.save(
+    `--output "${directory}" --title "duplicate flight"`,
+  );
+  releaseGeneration();
+  await firstSave;
+
+  assert.equal(
+    session.logs.filter((entry) => /save is already running/.test(entry.message))
+      .length,
+    1,
+  );
+  assert.equal(
+    await pathExists(
+      path.join(directory, archiveFolderName("duplicate flight", FIXED_DATE)),
+    ),
+    false,
   );
 });
 

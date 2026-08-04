@@ -122,6 +122,13 @@ plan when needed, and generates the handoff. Apply reports archive validation
 and the number of files being attached. A successful save always ends with the
 full archive path.
 
+Plan and handoff generation each use a foreground Copilot turn and can take up
+to three minutes. After `/stash2d-save` starts, do not send another message or
+run the command again until it reports either `Saved portable Copilot archive:
+<path>` or an error. A duplicate save request is ignored while one is active.
+Natural-language routing can explain the operation, but the user must enter the
+`/stash2d-save` or `/stash2d-apply` slash command to execute it.
+
 There are no automatic retries. Correct the reported cause before rerunning,
 and stop if the same error repeats:
 

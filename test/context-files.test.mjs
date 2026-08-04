@@ -171,6 +171,35 @@ test("skips inaccessible UNC references instead of aborting discovery", async ()
 
   assert.deepEqual(candidates, []);
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Skipped referenced external files/);
+  assert.match(warnings[0], /optional referenced paths/);
   assert.match(warnings[0], /UNKNOWN/);
+});
+
+test("combines inaccessible referenced-path warnings", async () => {
+  const warnings = [];
+  const candidates = await discoverExternalContextFiles(
+    "Read `C:\\one.txt`, `C:\\two.txt`, and `C:\\three.txt`.",
+    undefined,
+    {
+      excludedRoots: [],
+      resolveRealPath: async (filePath) => {
+        if (filePath.includes("one")) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        if (filePath.includes("two")) {
+          throw Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+        }
+        if (filePath.includes("three")) {
+          throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+        }
+        return filePath;
+      },
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.deepEqual(candidates, []);
+  assert.deepEqual(warnings, [
+    "Some optional referenced paths could not be inspected and were skipped (EACCES, ECONNRESET).",
+  ]);
 });

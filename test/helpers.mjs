@@ -56,6 +56,9 @@ export function fakeSession(overrides = {}) {
       ],
     sendAndWait: async (message) => {
       sent.push(message);
+      if (overrides.sendAndWait) {
+        return overrides.sendAndWait(message);
+      }
       return {
         data: {
           content:

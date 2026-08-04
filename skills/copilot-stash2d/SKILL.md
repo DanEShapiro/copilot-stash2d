@@ -4,9 +4,10 @@ description: >-
   Save, export, archive, transfer, or preserve the current GitHub Copilot CLI
   session as portable files, or apply, import, restore, recover, or continue
   from a Copilot Stash2D archive in a new session. Use when the user wants to
-  reuse the same Copilot configuration, conversation, plan, artifacts, or
-  working context in another session or on another computer. Do not use for
-  Git stash operations, generic file backups, or unrelated questions.
+  reuse the same Copilot conversation, plan, artifacts, or working context in
+  another session or on another computer. Do not use for Git stash operations,
+  generic file backups, Copilot CLI configuration transfer, or unrelated
+  questions.
 ---
 
 # Copilot Stash2D
@@ -39,6 +40,8 @@ archive validation, and archive attachment.
    ```
 
    Omit unknown flags. The command will ask for a title and destination.
+   Natural-language routing cannot execute the extension command; explicitly
+   tell the user to enter the slash command at the Copilot prompt.
 2. Explain that save reads the public session event history, copies available
    session plan/artifacts, optionally generates a continuation plan, and
    generates `Handoff.md`.
@@ -54,6 +57,10 @@ archive validation, and archive attachment.
    `SessionFiles/`, and approved `Context/` files.
 5. Do not claim success until the extension reports
    `Saved portable Copilot archive: <path>`.
+6. After the command starts, tell the user not to send another message or rerun
+   it while plan/handoff generation is visible. Each foreground generation
+   turn can take up to three minutes. A second save is ignored while one is
+   active.
 
 ## Apply workflow
 

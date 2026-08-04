@@ -215,169 +215,187 @@ export function createCommands({
     throw new Error("A Copilot session is required.");
   }
 
+  let saveInProgress = false;
+
   return {
     async save(rawArguments) {
-      let { outputDirectory, title } = parseSaveArguments(rawArguments);
-      await session.log(
-        "Copilot Stash2D is reading the public session history.",
-        { level: "info" },
-      );
-      const activeCwd = await currentWorkingDirectory(session, cwd);
-      const snapshot = await sessionSnapshot(session);
-      title ||=
-        (await inputIfAvailable(session, "Name this Copilot session archive", {
-          title: "Copilot Stash2D",
-          default: "session",
-        })) || "session";
-      outputDirectory ||=
-        (await inputIfAvailable(
-          session,
-          "Where should the Copilot Stash2D archive folder be created?",
-          {
-            title: "Copilot Stash2D",
-            default: activeCwd,
-          },
-        )) || activeCwd;
-      outputDirectory = path.resolve(
-        activeCwd,
-        expandHomePath(outputDirectory, homeDirectory),
-      );
-
-      const transcript = renderSessionMarkdown(snapshot.events);
-      const candidates = await discoverExternalContextFiles(
-        transcript,
-        undefined,
-        {
-          excludedRoots: [session.workspacePath],
-          onWarning: (message) =>
-            session.log(message, { level: "warning" }),
-        },
-      );
-      const contextReview = await chooseExternalFiles(session, candidates);
-      if (contextReview.cancelled) {
-        await session.log("Copilot Stash2D save cancelled. No archive was created.", {
-          level: "info",
-        });
+      if (saveInProgress) {
+        await session.log(
+          "A Copilot Stash2D save is already running. Wait for its saved-path confirmation or error before trying again.",
+          { level: "warning" },
+        );
         return;
       }
-      await session.log(
-        "Copilot Stash2D is creating the archive files.",
-        { level: "info" },
-      );
-      const createdAt = now();
-      await mkdir(outputDirectory, { recursive: true });
-      const archivePath = await createArchiveDirectory(
-        outputDirectory,
-        title,
-        createdAt,
-      );
-
+      saveInProgress = true;
       try {
-        await writeFile(path.join(archivePath, "Session.md"), transcript, "utf8");
-        const sessionArtifacts = await copySessionArtifacts(
-          session.workspacePath,
-          archivePath,
-        );
-        if (sessionArtifacts.unavailable) {
-          await session.log(
-            "This Copilot session did not expose a public workspace path, so no plan or session files were available to archive.",
-            { level: "warning" },
-          );
-        }
-        const externalContext = await copyExternalContextFiles(
-          contextReview.approved,
-          archivePath,
-        );
-        const sourceAttachments = [fileAttachment(archivePath, "Session.md")];
-        if (!sessionArtifacts.hasPlan) {
-          await session.log(
-            "Copilot Stash2D is generating a continuation plan.",
-            { level: "info" },
-          );
-          const generatedPlan = await generateDocument(
-            session,
-            PLAN_PROMPT,
-            "SessionState/plan.md",
-            sourceAttachments,
-          );
-          const planContent = `${generatedPlan.trim()}\n`;
-          await mkdir(path.join(archivePath, "SessionState"), {
-            recursive: true,
-          });
-          await writeFile(
-            path.join(archivePath, "SessionState", "plan.md"),
-            planContent,
-            "utf8",
-          );
-          sessionArtifacts.entries.push({
-            role: "generated-plan",
-            archivedPath: "SessionState/plan.md",
-            byteSize: Buffer.byteLength(planContent),
-          });
-        }
-        const additionalContext = (
-          await Promise.all(
-            ["SessionState", "SessionFiles", "Context"].map((relativePath) =>
-              listFilesRecursively(path.join(archivePath, relativePath)),
-            ),
-          )
-        )
-          .flat()
-          .map((filePath) => ({
-            type: "file",
-            path: filePath,
-            displayName: path
-              .relative(archivePath, filePath)
-              .split(path.sep)
-              .join("/"),
-          }));
+        let { outputDirectory, title } = parseSaveArguments(rawArguments);
         await session.log(
-          "Copilot Stash2D is generating the session handoff.",
+          "Copilot Stash2D save started. Wait for a saved-path confirmation or error before sending another message or running /stash2d-save again.",
           { level: "info" },
         );
-        const handoff = await generateDocument(
-          session,
-          HANDOFF_PROMPT,
-          "Handoff.md",
-          [
-            fileAttachment(archivePath, "Session.md"),
-            ...additionalContext,
-          ],
+        await session.log(
+          "Copilot Stash2D is reading the public session history.",
+          { level: "info" },
         );
-        await writeHandoff(archivePath, handoff);
-        await writeMetadata(archivePath, {
-          formatVersion: ARCHIVE_FORMAT_VERSION,
-          pluginVersion: PLUGIN_VERSION,
-          title,
-          createdAt: createdAt.toISOString(),
-          sessionSource: "public-session-events",
-          sessionEventCount: snapshot.events.length,
-          workingDirectory: activeCwd,
-          repository: await repositoryMetadata(activeCwd),
-          sessionArtifacts: sessionArtifacts.entries,
-          externalContext,
-        });
-      } catch (error) {
-        try {
-          await cleanupArchive(archivePath);
-        } catch (cleanupError) {
-          await session.log(
-            [
-              `Copilot Stash2D could not remove incomplete archive: ${archivePath}`,
-              cleanupError instanceof Error
-                ? cleanupError.message
-                : String(cleanupError),
-            ].join("\n"),
-            { level: "warning" },
-          );
-        }
-        throw error;
-      }
+        const activeCwd = await currentWorkingDirectory(session, cwd);
+        const snapshot = await sessionSnapshot(session);
+        title ||=
+          (await inputIfAvailable(session, "Name this Copilot session archive", {
+            title: "Copilot Stash2D",
+            default: "session",
+          })) || "session";
+        outputDirectory ||=
+          (await inputIfAvailable(
+            session,
+            "Where should the Copilot Stash2D archive folder be created?",
+            {
+              title: "Copilot Stash2D",
+              default: activeCwd,
+            },
+          )) || activeCwd;
+        outputDirectory = path.resolve(
+          activeCwd,
+          expandHomePath(outputDirectory, homeDirectory),
+        );
 
-      await session.log(
-        `Saved portable Copilot archive: ${archivePath}`,
-        { level: "info" },
-      );
+        const transcript = renderSessionMarkdown(snapshot.events);
+        const candidates = await discoverExternalContextFiles(
+          transcript,
+          undefined,
+          {
+            excludedRoots: [session.workspacePath],
+            onWarning: (message) =>
+              session.log(message, { level: "warning" }),
+          },
+        );
+        const contextReview = await chooseExternalFiles(session, candidates);
+        if (contextReview.cancelled) {
+          await session.log("Copilot Stash2D save cancelled. No archive was created.", {
+            level: "info",
+          });
+          return;
+        }
+        await session.log(
+          "Copilot Stash2D is creating the archive files.",
+          { level: "info" },
+        );
+        const createdAt = now();
+        await mkdir(outputDirectory, { recursive: true });
+        const archivePath = await createArchiveDirectory(
+          outputDirectory,
+          title,
+          createdAt,
+        );
+
+        try {
+          await writeFile(path.join(archivePath, "Session.md"), transcript, "utf8");
+          const sessionArtifacts = await copySessionArtifacts(
+            session.workspacePath,
+            archivePath,
+          );
+          if (sessionArtifacts.unavailable) {
+            await session.log(
+              "This Copilot session did not expose a public workspace path, so no plan or session files were available to archive.",
+              { level: "warning" },
+            );
+          }
+          const externalContext = await copyExternalContextFiles(
+            contextReview.approved,
+            archivePath,
+          );
+          const sourceAttachments = [fileAttachment(archivePath, "Session.md")];
+          if (!sessionArtifacts.hasPlan) {
+            await session.log(
+              "Copilot Stash2D is generating a continuation plan. This can take up to 3 minutes; do not send another message or rerun the command.",
+              { level: "info" },
+            );
+            const generatedPlan = await generateDocument(
+              session,
+              PLAN_PROMPT,
+              "SessionState/plan.md",
+              sourceAttachments,
+            );
+            const planContent = `${generatedPlan.trim()}\n`;
+            await mkdir(path.join(archivePath, "SessionState"), {
+              recursive: true,
+            });
+            await writeFile(
+              path.join(archivePath, "SessionState", "plan.md"),
+              planContent,
+              "utf8",
+            );
+            sessionArtifacts.entries.push({
+              role: "generated-plan",
+              archivedPath: "SessionState/plan.md",
+              byteSize: Buffer.byteLength(planContent),
+            });
+          }
+          const additionalContext = (
+            await Promise.all(
+              ["SessionState", "SessionFiles", "Context"].map((relativePath) =>
+                listFilesRecursively(path.join(archivePath, relativePath)),
+              ),
+            )
+          )
+            .flat()
+            .map((filePath) => ({
+              type: "file",
+              path: filePath,
+              displayName: path
+                .relative(archivePath, filePath)
+                .split(path.sep)
+                .join("/"),
+            }));
+          await session.log(
+            "Copilot Stash2D is generating the session handoff. This can take up to 3 minutes; do not send another message or rerun the command.",
+            { level: "info" },
+          );
+          const handoff = await generateDocument(
+            session,
+            HANDOFF_PROMPT,
+            "Handoff.md",
+            [
+              fileAttachment(archivePath, "Session.md"),
+              ...additionalContext,
+            ],
+          );
+          await writeHandoff(archivePath, handoff);
+          await writeMetadata(archivePath, {
+            formatVersion: ARCHIVE_FORMAT_VERSION,
+            pluginVersion: PLUGIN_VERSION,
+            title,
+            createdAt: createdAt.toISOString(),
+            sessionSource: "public-session-events",
+            sessionEventCount: snapshot.events.length,
+            workingDirectory: activeCwd,
+            repository: await repositoryMetadata(activeCwd),
+            sessionArtifacts: sessionArtifacts.entries,
+            externalContext,
+          });
+        } catch (error) {
+          try {
+            await cleanupArchive(archivePath);
+          } catch (cleanupError) {
+            await session.log(
+              [
+                `Copilot Stash2D could not remove incomplete archive: ${archivePath}`,
+                cleanupError instanceof Error
+                  ? cleanupError.message
+                  : String(cleanupError),
+              ].join("\n"),
+              { level: "warning" },
+            );
+          }
+          throw error;
+        }
+
+        await session.log(
+          `Saved portable Copilot archive: ${archivePath}`,
+          { level: "info" },
+        );
+      } finally {
+        saveInProgress = false;
+      }
     },
 
     async apply(rawArguments) {

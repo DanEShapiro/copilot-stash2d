@@ -162,6 +162,7 @@ export async function discoverExternalContextFiles(
   );
   const candidates = [];
   const seen = new Set();
+  const skippedCandidateErrors = new Set();
 
   for (const referencedPath of extractReferencedPaths(markdown)) {
     const absolutePath = path.resolve(referencedPath);
@@ -174,10 +175,7 @@ export async function discoverExternalContextFiles(
       if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
         continue;
       }
-      await warnOnce(
-        `candidate:${error?.code ?? error?.message}`,
-        `Skipped referenced external files that could not be inspected. ${error.message}`,
-      );
+      skippedCandidateErrors.add(error?.code ?? "unknown error");
       continue;
     }
     if (!info.isFile() || resolvedPath === sourceRealPath || seen.has(resolvedPath)) {
@@ -203,6 +201,12 @@ export async function discoverExternalContextFiles(
       resolvedPath,
       byteSize: info.size,
     });
+  }
+
+  if (skippedCandidateErrors.size > 0) {
+    await onWarning(
+      `Some optional referenced paths could not be inspected and were skipped (${[...skippedCandidateErrors].join(", ")}).`,
+    );
   }
 
   return candidates;
