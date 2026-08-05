@@ -74,6 +74,19 @@ test("extracts explicit relative paths", () => {
   );
 });
 
+test("extracts local Markdown link destinations", () => {
+  assert.deepEqual(
+    extractReferencedPaths(
+      "[POSIX](/tmp/input.txt) [Windows](C:\\work\\input.txt) [relative](./docs/input.txt)",
+    ),
+    ["/tmp/input.txt", "C:\\work\\input.txt", "./docs/input.txt"],
+  );
+  assert.deepEqual(
+    extractReferencedPaths("[remote](https://example.com/input.txt)"),
+    [],
+  );
+});
+
 test("does not treat bare slash commands or single-segment routes as files", () => {
   assert.deepEqual(
     extractReferencedPaths(

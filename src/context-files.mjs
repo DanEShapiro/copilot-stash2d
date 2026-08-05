@@ -108,6 +108,11 @@ function extractReferencedPathReferences(
   const patterns = [
     {
       expression:
+        /\]\(\s*<?((?:~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\|[^)\s/\\]+[\\/])[^)\r\n>]*?)>?(?:\s+["'][^"']*["'])?\s*\)/g,
+      bare: false,
+    },
+    {
+      expression:
         /`((?:~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\|[^`\s/\\]+[\\/])[^`\r\n]+)`/g,
       bare: false,
     },

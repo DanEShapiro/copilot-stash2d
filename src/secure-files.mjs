@@ -47,7 +47,13 @@ export function fileIdentity(info) {
 
 export async function assertNoLinkedPathComponents(
   filePath,
-  { getLinkInfo = lstat, checkedPaths = new Set() } = {},
+  {
+    allowedLinkedPaths = process.platform === "darwin"
+      ? new Set(["/etc", "/tmp", "/var"])
+      : new Set(),
+    getLinkInfo = lstat,
+    checkedPaths = new Set(),
+  } = {},
 ) {
   const absolutePath = path.resolve(filePath);
   const root = path.parse(absolutePath).root;
@@ -64,6 +70,10 @@ export async function assertNoLinkedPathComponents(
     }
     const info = await getLinkInfo(currentPath);
     if (info.isSymbolicLink()) {
+      if (allowedLinkedPaths.has(currentPath)) {
+        checkedPaths.add(key);
+        continue;
+      }
       const error = new Error(
         `Linked path components are not supported: ${currentPath}`,
       );
@@ -172,10 +182,12 @@ export async function copyVerifiedFile(
     failure = error;
     throw error;
   } finally {
+    let destinationClosed = false;
+    let sourceClosed = false;
     if (destinationHandle) {
       try {
         await destinationHandle.close();
-        completed = copyComplete;
+        destinationClosed = true;
       } catch (error) {
         failure = new DestinationFileCopyError(destinationPath, error);
       }
@@ -183,10 +195,12 @@ export async function copyVerifiedFile(
     if (sourceHandle) {
       try {
         await sourceHandle.close();
+        sourceClosed = true;
       } catch (error) {
         failure ??= new SourceFileCopyError(sourcePath, error);
       }
     }
+    completed = copyComplete && destinationClosed && sourceClosed;
     if (destinationCreated && !completed) {
       try {
         await removeFile(destinationPath, { force: true });
