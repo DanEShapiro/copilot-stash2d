@@ -157,6 +157,19 @@ test("groups explicitly referenced directories and copies their files", async (t
   );
 });
 
+test("does not traverse a directory mentioned without archive intent", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "large-local-tree");
+  await writeText(path.join(source, "one.txt"), "one");
+
+  const candidates = await discoverExternalContextFiles(
+    `The ${source} path is local, not on the sandbox. Where is it there?`,
+    undefined,
+  );
+
+  assert.deepEqual(candidates, []);
+});
+
 test("skips referenced Git trees and nested repositories", async (t) => {
   const directory = await temporaryDirectory(t);
   const repository = path.join(directory, "repository");

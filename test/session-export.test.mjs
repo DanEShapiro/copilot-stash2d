@@ -123,3 +123,26 @@ test("external reference discovery ignores quoted Stash2D directory warnings", (
   assert.doesNotMatch(markdown, /Q:\\spocore/);
   assert.match(markdown, /notes\.txt/);
 });
+
+test("external reference discovery ignores pasted code and shell transcripts", () => {
+  const markdown = renderExternalReferenceMarkdown([
+    {
+      type: "user.message",
+      data: {
+        content: [
+          "```powershell",
+          "$roots = 'C:\\Packages'",
+          "```",
+          "> $searchRoots = @('C:\\Windows\\assembly')",
+          "$otherRoots = @('C:\\Windows\\Microsoft.NET\\assembly')",
+          "Please inspect `C:\\Users\\me\\notes.txt`.",
+        ].join("\n"),
+      },
+    },
+  ]);
+
+  assert.doesNotMatch(markdown, /C:\\Packages/);
+  assert.doesNotMatch(markdown, /Windows\\assembly/);
+  assert.doesNotMatch(markdown, /Microsoft\.NET/);
+  assert.match(markdown, /notes\.txt/);
+});

@@ -37,9 +37,11 @@ Values can also be supplied inline:
 Stash2D may offer to include external files or directories explicitly present
 in user messages or user attachments. Tool arguments are model-generated
 implementation details and are not treated as archive intent. Paths that only
-appear in assistant prose, tool calls, tool output, tracebacks, or other
-generated results are ignored. Git-repository files, Copilot internals, and the
-active session workspace are also excluded.
+appear in assistant prose, tool calls, tool output, tracebacks, pasted code, or
+shell transcripts are ignored. Mentioned directories are traversed only when
+the surrounding user prose expresses an intent to read, inspect, or include
+them. Git-repository files, Copilot internals, and the active session workspace
+are also excluded.
 
 The chooser is a native multi-select list. Referenced directories appear as one
 group with their eligible file count and total size, so a directory can be

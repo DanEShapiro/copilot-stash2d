@@ -114,6 +114,23 @@ export function extractReferencedPaths(markdown) {
   return [...values];
 }
 
+function hasDirectoryReferenceIntent(markdown, referencedPath) {
+  const escapedPath = referencedPath.replaceAll("\\", "\\\\");
+  const intent =
+    /\b(?:analy[sz]e|archive|copy|include|inspect|keep|look|open|read|review|save|scan|search|use)\b|\b(?:directories|directory|files|folder|folders|tree)\b/i;
+  return markdown
+    .split(/\r?\n/)
+    .some((line) => {
+      if (!line.includes(referencedPath) && !line.includes(escapedPath)) {
+        return false;
+      }
+      const surroundingText = line
+        .replaceAll(referencedPath, "")
+        .replaceAll(escapedPath, "");
+      return intent.test(surroundingText);
+    });
+}
+
 async function gitRootFor(filePath) {
   try {
     const { stdout } = await execFileAsync(
@@ -356,10 +373,17 @@ export async function discoverExternalContextFiles(
     const absolutePath = path.resolve(baseDirectory, referencedPath);
     try {
       const resolvedPath = await resolveRealPath(absolutePath);
+      const info = await getFileInfo(resolvedPath);
+      if (
+        info.isDirectory() &&
+        !hasDirectoryReferenceIntent(markdown, referencedPath)
+      ) {
+        continue;
+      }
       references.push({
         referencedPath,
         resolvedPath,
-        info: await getFileInfo(resolvedPath),
+        info,
       });
     } catch (error) {
       skippedCandidateErrors.add(error?.code ?? "unknown error");

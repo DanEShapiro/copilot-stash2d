@@ -28,11 +28,21 @@ function attachmentSummary(attachments) {
   return `\n\n### Attachments\n\n${json(attachments)}`;
 }
 
-function removeGeneratedDiscoveryWarnings(content) {
-  return content.replace(
-    /^(?:>\s*)?Referenced directory .+ exceeds the discovery safety limit of \d+ files or \d+ directories and was skipped\.\s*$/gm,
-    "",
-  );
+function sanitizeUserReferenceContent(content) {
+  return content
+    .replace(/```[\s\S]*?```/g, "")
+    .split(/\r?\n/)
+    .filter(
+      (line) =>
+        !/^(?:\s*>{1,2}\s*)?\$[\w:.-]+\s*=/.test(line) &&
+        !/^\s*>{1,2}\s*(?:#|\[|(?:Add|Copy|Export|Find|Get|Import|Invoke|Move|New|Remove|Select|Set|Start|Stop|Test|Where)-[\w-]+)/i.test(
+          line,
+        ) &&
+        !/^(?:>\s*)?Referenced directory .+ exceeds the discovery safety limit of \d+ files or \d+ directories and was skipped\.\s*$/.test(
+          line,
+        ),
+    )
+    .join("\n");
 }
 
 export function renderExternalReferenceMarkdown(events) {
@@ -44,7 +54,7 @@ export function renderExternalReferenceMarkdown(events) {
     const data = event.data ?? {};
     if (event.type === "user.message") {
       sections.push(
-        `${removeGeneratedDiscoveryWarnings(data.content ?? "")}${attachmentSummary(data.attachments)}`,
+        `${sanitizeUserReferenceContent(data.content ?? "")}${attachmentSummary(data.attachments)}`,
       );
     }
   }
