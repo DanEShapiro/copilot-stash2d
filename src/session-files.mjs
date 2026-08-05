@@ -45,7 +45,11 @@ export async function copySessionArtifacts(workspacePath, archivePath) {
       path.join(archivePath, "SessionFiles"),
     );
     entries.push(
-      ...copied.map((entry) => ({ role: "session-file", ...entry })),
+      ...copied.map((entry) => ({
+        role: "session-file",
+        ...entry,
+        archivedPath: path.posix.join("SessionFiles", entry.archivedPath),
+      })),
     );
   }
 

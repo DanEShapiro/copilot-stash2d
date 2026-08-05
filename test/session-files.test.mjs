@@ -33,7 +33,14 @@ test("preserves plan.md and the complete session files tree", async (t) => {
     readFile(path.join(archive, "database.db"), "utf8"),
     /ENOENT/,
   );
-  assert.equal(result.entries.length, 3);
+  assert.deepEqual(
+    result.entries.map(({ archivedPath }) => archivedPath).sort(),
+    [
+      "SessionFiles/diagram.txt",
+      "SessionFiles/nested/notes.md",
+      "SessionState/plan.md",
+    ],
+  );
 });
 
 test("reports unavailable public workspace paths", async (t) => {

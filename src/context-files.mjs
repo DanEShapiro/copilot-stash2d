@@ -63,14 +63,33 @@ function splitFusedPaths(value) {
 export function extractReferencedPaths(markdown) {
   const values = new Set();
   const patterns = [
-    /`((?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^`\r\n]+)`/g,
-    /["']((?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^"'\r\n]+)["']/g,
-    /(?:^|\s)((?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^\s<>{}\[\]"'`]+)/gm,
+    {
+      expression:
+        /`((?:~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^`\r\n]+)`/g,
+      bare: false,
+    },
+    {
+      expression:
+        /["']((?:~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^"'\r\n]+)["']/g,
+      bare: false,
+    },
+    {
+      expression:
+        /(?:^|\s)((?:~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^\s<>{}\[\]"'`]+)/gm,
+      bare: true,
+    },
   ];
   for (const pattern of patterns) {
-    for (const match of markdown.matchAll(pattern)) {
+    for (const match of markdown.matchAll(pattern.expression)) {
       for (const fragment of splitFusedPaths(match[1])) {
         const candidate = cleanCandidate(fragment);
+        if (
+          pattern.bare &&
+          candidate.startsWith("/") &&
+          !candidate.slice(1).includes("/")
+        ) {
+          continue;
+        }
         if (candidate) {
           values.add(candidate);
         }
@@ -113,6 +132,7 @@ export async function discoverExternalContextFiles(
   markdown,
   sourcePath,
   {
+    baseDirectory = process.cwd(),
     excludedRoots = [],
     classifyGitRoot = gitRootFor,
     resolveRealPath = realpath,
@@ -165,16 +185,13 @@ export async function discoverExternalContextFiles(
   const skippedCandidateErrors = new Set();
 
   for (const referencedPath of extractReferencedPaths(markdown)) {
-    const absolutePath = path.resolve(referencedPath);
+    const absolutePath = path.resolve(baseDirectory, referencedPath);
     let resolvedPath;
     let info;
     try {
       resolvedPath = await resolveRealPath(absolutePath);
       info = await getFileInfo(resolvedPath);
     } catch (error) {
-      if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
-        continue;
-      }
       skippedCandidateErrors.add(error?.code ?? "unknown error");
       continue;
     }

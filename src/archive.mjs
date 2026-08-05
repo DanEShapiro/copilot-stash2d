@@ -141,7 +141,10 @@ export async function copyTree(sourceRoot, destinationRoot) {
   return copied;
 }
 
-export async function validateArchive(archivePath) {
+export async function validateArchive(
+  archivePath,
+  { maxMetadataBytes = 1024 * 1024 } = {},
+) {
   async function assertSafeTree(entryPath) {
     const info = await lstat(entryPath);
     if (info.isSymbolicLink()) {
@@ -174,6 +177,7 @@ export async function validateArchive(archivePath) {
   await assertSafeTree(archivePath);
 
   const requiredFiles = ["Session.md", "Handoff.md", "Metadata.json"];
+  let metadataInfo;
   for (const fileName of requiredFiles) {
     const filePath = path.join(archivePath, fileName);
     let info;
@@ -188,6 +192,14 @@ export async function validateArchive(archivePath) {
     if (!info.isFile()) {
       throw new Error(`Archive entry must be a regular file: ${fileName}`);
     }
+    if (fileName === "Metadata.json") {
+      metadataInfo = info;
+    }
+  }
+  if (metadataInfo.size > maxMetadataBytes) {
+    throw new Error(
+      `Metadata.json is ${metadataInfo.size} bytes; the Stash2D safety limit is ${maxMetadataBytes}.`,
+    );
   }
 
   let metadata;

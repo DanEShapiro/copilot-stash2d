@@ -1,4 +1,4 @@
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -27,6 +27,8 @@ import { copySessionArtifacts } from "./session-files.mjs";
 import { PLUGIN_VERSION } from "./version.mjs";
 
 const execFileAsync = promisify(execFile);
+const MAX_ATTACHMENT_FILES = 100;
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 
 async function requireDirectory(directoryPath) {
   let info;
@@ -45,7 +47,7 @@ async function requireDirectory(directoryPath) {
 
 async function inputIfAvailable(session, message, options) {
   if (!session.capabilities?.ui?.elicitation) {
-    return null;
+    return undefined;
   }
   return session.ui.input(message, options);
 }
@@ -115,7 +117,9 @@ async function repositoryMetadata(workingDirectory) {
   try {
     return {
       root,
-      remote: await gitValue(["remote", "get-url", "origin"]),
+      remote: sanitizeRemoteUrl(
+        await gitValue(["remote", "get-url", "origin"]),
+      ),
       branch: await gitValue(["branch", "--show-current"]),
       commit: await gitValue(["rev-parse", "HEAD"]),
     };
@@ -124,7 +128,48 @@ async function repositoryMetadata(workingDirectory) {
   }
 }
 
+export function sanitizeRemoteUrl(remote) {
+  if (!remote) {
+    return remote;
+  }
+  try {
+    const parsed = new URL(remote);
+    if (!parsed.username && !parsed.password) {
+      return remote;
+    }
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return remote;
+  }
+}
+
+async function assertOutputOutsideSessionFiles(outputDirectory, workspacePath) {
+  if (!workspacePath) {
+    return;
+  }
+  const sessionFilesPath = path.join(workspacePath, "files");
+  if (!(await pathExists(sessionFilesPath))) {
+    return;
+  }
+  const [sourceRoot, outputRoot] = await Promise.all([
+    realpath(sessionFilesPath),
+    realpath(outputDirectory),
+  ]);
+  const relative = path.relative(sourceRoot, outputRoot);
+  if (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  ) {
+    throw new Error(
+      `Archive output must not be inside the session files directory: ${sessionFilesPath}`,
+    );
+  }
+}
+
 async function generateDocument(session, prompt, displayPrompt, attachments) {
+  await assertAttachmentBudget(attachments, displayPrompt);
   const response = await session.sendAndWait(
     {
       prompt,
@@ -138,6 +183,23 @@ async function generateDocument(session, prompt, displayPrompt, attachments) {
     throw new Error(`Copilot did not return content for ${displayPrompt}.`);
   }
   return content;
+}
+
+async function assertAttachmentBudget(attachments, operation) {
+  if (attachments.length > MAX_ATTACHMENT_FILES) {
+    throw new Error(
+      `${operation} requires ${attachments.length} attachments; the Stash2D safety limit is ${MAX_ATTACHMENT_FILES}. Remove nonessential session or context files and retry.`,
+    );
+  }
+  let totalBytes = 0;
+  for (const attachment of attachments) {
+    totalBytes += (await stat(attachment.path)).size;
+  }
+  if (totalBytes > MAX_ATTACHMENT_BYTES) {
+    throw new Error(
+      `${operation} requires ${totalBytes} attachment bytes; the Stash2D safety limit is ${MAX_ATTACHMENT_BYTES}. Remove nonessential session or context files and retry.`,
+    );
+  }
 }
 
 function fileAttachment(archivePath, relativePath) {
@@ -166,6 +228,16 @@ async function chooseExternalFiles(session, candidates) {
   const SKIP_REMAINING = "Skip all remaining files";
   const CANCEL = "Cancel save";
   const approved = [];
+  await session.log(
+    [
+      `Review ${candidates.length} external context file(s) before approving them:`,
+      ...candidates.map(
+        (candidate, index) =>
+          `${index + 1}. ${candidate.resolvedPath} (${candidate.byteSize} bytes)`,
+      ),
+    ].join("\n"),
+    { level: "info" },
+  );
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     const choice = await session.ui.select(
@@ -204,6 +276,31 @@ function attachmentIfPresent(archivePath, relativePath) {
   );
 }
 
+async function collectArchiveAttachments(archivePath) {
+  const coreAttachments = (
+    await Promise.all([
+      attachmentIfPresent(archivePath, "Handoff.md"),
+      attachmentIfPresent(archivePath, "Session.md"),
+      attachmentIfPresent(archivePath, "Metadata.json"),
+    ])
+  ).filter(Boolean);
+  const additionalFiles = (
+    await Promise.all(
+      ["SessionState", "SessionFiles", "Context"].map((relativePath) =>
+        listFilesRecursively(path.join(archivePath, relativePath)),
+      ),
+    )
+  ).flat();
+  return [
+    ...coreAttachments,
+    ...additionalFiles.map((filePath) => ({
+      type: "file",
+      path: filePath,
+      displayName: path.relative(archivePath, filePath).split(path.sep).join("/"),
+    })),
+  ];
+}
+
 export function createCommands({
   session,
   cwd = process.cwd(),
@@ -239,20 +336,42 @@ export function createCommands({
         );
         const activeCwd = await currentWorkingDirectory(session, cwd);
         const snapshot = await sessionSnapshot(session);
-        title ||=
-          (await inputIfAvailable(session, "Name this Copilot session archive", {
-            title: "Copilot Stash2D",
-            default: "session",
-          })) || "session";
-        outputDirectory ||=
-          (await inputIfAvailable(
+        if (!title) {
+          const promptedTitle = await inputIfAvailable(
+            session,
+            "Name this Copilot session archive",
+            {
+              title: "Copilot Stash2D",
+              default: "session",
+            },
+          );
+          if (promptedTitle === null) {
+            await session.log(
+              "Copilot Stash2D save cancelled. No archive was created.",
+              { level: "info" },
+            );
+            return;
+          }
+          title = promptedTitle || "session";
+        }
+        if (!outputDirectory) {
+          const promptedOutput = await inputIfAvailable(
             session,
             "Where should the Copilot Stash2D archive folder be created?",
             {
               title: "Copilot Stash2D",
               default: activeCwd,
             },
-          )) || activeCwd;
+          );
+          if (promptedOutput === null) {
+            await session.log(
+              "Copilot Stash2D save cancelled. No archive was created.",
+              { level: "info" },
+            );
+            return;
+          }
+          outputDirectory = promptedOutput || activeCwd;
+        }
         outputDirectory = path.resolve(
           activeCwd,
           expandHomePath(outputDirectory, homeDirectory),
@@ -263,6 +382,7 @@ export function createCommands({
           transcript,
           undefined,
           {
+            baseDirectory: activeCwd,
             excludedRoots: [session.workspacePath],
             onWarning: (message) =>
               session.log(message, { level: "warning" }),
@@ -281,6 +401,10 @@ export function createCommands({
         );
         const createdAt = now();
         await mkdir(outputDirectory, { recursive: true });
+        await assertOutputOutsideSessionFiles(
+          outputDirectory,
+          session.workspacePath,
+        );
         const archivePath = await createArchiveDirectory(
           outputDirectory,
           title,
@@ -372,6 +496,10 @@ export function createCommands({
             sessionArtifacts: sessionArtifacts.entries,
             externalContext,
           });
+          await assertAttachmentBudget(
+            await collectArchiveAttachments(archivePath),
+            "Saved archive apply",
+          );
         } catch (error) {
           try {
             await cleanupArchive(archivePath);
@@ -401,10 +529,23 @@ export function createCommands({
     async apply(rawArguments) {
       let archivePath = parseApplyArguments(rawArguments);
       const activeCwd = await currentWorkingDirectory(session, cwd);
-      archivePath ||=
-        await inputIfAvailable(session, "Choose a Copilot Stash2D archive folder", {
-          title: "Apply Copilot Stash2D archive",
-        });
+      if (!archivePath) {
+        const promptedArchive = await inputIfAvailable(
+          session,
+          "Choose a Copilot Stash2D archive folder",
+          {
+            title: "Apply Copilot Stash2D archive",
+          },
+        );
+        if (promptedArchive === null) {
+          await session.log(
+            "Copilot Stash2D apply cancelled. No archive was attached.",
+            { level: "info" },
+          );
+          return;
+        }
+        archivePath = promptedArchive;
+      }
       if (!archivePath) {
         throw new Error(
           "Usage: /stash2d-apply <archive-folder>",
@@ -421,29 +562,9 @@ export function createCommands({
       await requireDirectory(archivePath);
       await validateArchive(archivePath);
 
-      const coreAttachments = (
-        await Promise.all([
-          attachmentIfPresent(archivePath, "Handoff.md"),
-          attachmentIfPresent(archivePath, "Session.md"),
-          attachmentIfPresent(archivePath, "Metadata.json"),
-        ])
-      ).filter(Boolean);
-      const additionalFiles = (
-        await Promise.all(
-          ["SessionState", "SessionFiles", "Context"].map((relativePath) =>
-            listFilesRecursively(path.join(archivePath, relativePath)),
-          ),
-        )
-      ).flat();
-      const attachments = [
-        ...coreAttachments,
-        ...additionalFiles.map((filePath) => ({
-          type: "file",
-          path: filePath,
-          displayName: path.relative(archivePath, filePath).split(path.sep).join("/"),
-        })),
-      ];
+      const attachments = await collectArchiveAttachments(archivePath);
 
+      await assertAttachmentBudget(attachments, "Archive apply");
       try {
         await session.log(
           `Copilot Stash2D is attaching ${attachments.length} archive file(s).`,

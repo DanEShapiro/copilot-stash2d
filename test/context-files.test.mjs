@@ -41,6 +41,22 @@ test("extracts Windows UNC paths", () => {
   );
 });
 
+test("extracts explicit relative paths", () => {
+  assert.deepEqual(
+    extractReferencedPaths("Read `./local.txt` and '../shared/input.json'."),
+    ["./local.txt", "../shared/input.json"],
+  );
+});
+
+test("does not treat bare slash commands or single-segment routes as files", () => {
+  assert.deepEqual(
+    extractReferencedPaths(
+      "Use /cwd, /plugin, and /stash2d-save. API route /users. Read /tmp/input.txt and /etc/hosts.",
+    ),
+    ["/tmp/input.txt", "/etc/hosts"],
+  );
+});
+
 test("identifies Copilot home and cache roots", () => {  assert.deepEqual(
     copilotInternalRoots({
       env: {},
@@ -65,6 +81,22 @@ test("discovers external files but excludes files in Git repositories", async (t
   const candidates = await discoverExternalContextFiles(
     `Read \`${external}\` and \`${repositoryFile}\`.`,
     exportPath,
+  );
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].resolvedPath, await realpath(external));
+});
+
+test("resolves relative references against the active working directory", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const external = path.join(directory, "outside", "input.txt");
+  const currentDirectory = path.join(directory, "work");
+  await writeText(external, "external");
+
+  const candidates = await discoverExternalContextFiles(
+    "Read `../outside/input.txt`.",
+    undefined,
+    { baseDirectory: currentDirectory },
   );
 
   assert.equal(candidates.length, 1);
@@ -201,5 +233,26 @@ test("combines inaccessible referenced-path warnings", async () => {
   assert.deepEqual(candidates, []);
   assert.deepEqual(warnings, [
     "Some optional referenced paths could not be inspected and were skipped (EACCES, ECONNRESET).",
+  ]);
+});
+
+test("warns when referenced paths are missing", async () => {
+  const warnings = [];
+  const candidates = await discoverExternalContextFiles(
+    "Read `C:\\missing.txt` and `C:\\not-a-directory\\input.txt`.",
+    undefined,
+    {
+      excludedRoots: [],
+      resolveRealPath: async (filePath) => {
+        const code = filePath.includes("not-a-directory") ? "ENOTDIR" : "ENOENT";
+        throw Object.assign(new Error(code), { code });
+      },
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.deepEqual(candidates, []);
+  assert.deepEqual(warnings, [
+    "Some optional referenced paths could not be inspected and were skipped (ENOENT, ENOTDIR).",
   ]);
 });

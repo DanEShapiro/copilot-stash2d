@@ -20,6 +20,14 @@ test("preserves Windows UNC paths", () => {
   );
 });
 
+test("preserves quoted Windows paths ending in a separator", () => {
+  assert.deepEqual(tokenizeArguments('"C:\\Temp\\"'), ["C:\\Temp\\"]);
+  assert.deepEqual(
+    tokenizeArguments('"\\\\server\\share\\"'),
+    ["\\\\server\\share\\"],
+  );
+});
+
 test("supports unquoted escaped spaces on POSIX", () => {
   assert.deepEqual(
     parseSaveArguments("--output /tmp/archive\\ folder --title work"),
@@ -42,6 +50,51 @@ test("parses direct and flagged save arguments", () => {
   assert.deepEqual(
     parseSaveArguments('--title "Useful work" --output "/tmp/stashes"'),
     { outputDirectory: "/tmp/stashes", title: "Useful work" },
+  );
+});
+
+test("rejects missing and duplicate save option values", () => {
+  assert.throws(
+    () => parseSaveArguments("--output --title work"),
+    /--output requires a directory path/,
+  );
+  assert.throws(
+    () => parseSaveArguments("--title --output /tmp"),
+    /--title requires a value/,
+  );
+  assert.throws(
+    () => parseSaveArguments("--output /tmp --output /var/tmp"),
+    /--output may only be specified once/,
+  );
+  assert.throws(
+    () => parseSaveArguments("--title one --title two"),
+    /--title may only be specified once/,
+  );
+});
+
+test("allows quoted option-like save values", () => {
+  assert.deepEqual(parseSaveArguments('--title "--output"'), {
+    outputDirectory: undefined,
+    title: "--output",
+  });
+  assert.deepEqual(parseSaveArguments('--output "--title"'), {
+    outputDirectory: "--title",
+    title: undefined,
+  });
+});
+
+test("rejects unknown options and unquoted option-like values", () => {
+  assert.throws(
+    () => parseSaveArguments("--ouptut /tmp --title work"),
+    /Unknown option: --ouptut/,
+  );
+  assert.throws(
+    () => parseSaveArguments("--title --bogus"),
+    /--title requires a value/,
+  );
+  assert.throws(
+    () => parseSaveArguments("--output --bogus --title work"),
+    /--output requires a directory path/,
   );
 });
 

@@ -46,6 +46,18 @@ test("rejects unsupported archive versions", async (t) => {
   );
 });
 
+test("rejects oversized metadata before parsing it", async (t) => {
+  const directory = await temporaryDirectory(t);
+  await writeText(path.join(directory, "Session.md"), "session");
+  await writeText(path.join(directory, "Handoff.md"), "handoff");
+  await writeText(path.join(directory, "Metadata.json"), '{"large":"value"}');
+
+  await assert.rejects(
+    validateArchive(directory, { maxMetadataBytes: 4 }),
+    /Metadata\.json is 17 bytes.*safety limit is 4/,
+  );
+});
+
 test("rejects symlinks in edited archives before apply", async (t) => {
   const directory = await temporaryDirectory(t);
   const outside = path.join(directory, "outside.txt");
