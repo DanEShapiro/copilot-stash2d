@@ -6,6 +6,7 @@ import {
   ARCHIVE_FORMAT_VERSION,
   archiveFolderName,
   copyTree,
+  pathExists,
   sanitizeTitle,
   validateArchive,
   writeMetadata,
@@ -131,5 +132,31 @@ test("bounds archive entry count and nesting depth", async (t) => {
   await assert.rejects(
     validateArchive(archive, { maxDepth: 1 }),
     /safety depth limit of 1/,
+  );
+});
+
+test("bounds and verifies session artifact copies", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "source");
+  const sourceFile = path.join(source, "artifact.txt");
+  const destination = path.join(directory, "destination");
+  await writeText(sourceFile, "original");
+
+  await assert.rejects(
+    copyTree(source, destination, { maxBytes: 2 }),
+    /safety limit of 2 total bytes/,
+  );
+
+  await assert.rejects(
+    copyTree(source, destination, {
+      beforeCopy: async (filePath) => {
+        await writeText(filePath, "replacement");
+      },
+    }),
+    /Source file changed while it was being copied/,
+  );
+  assert.equal(
+    await pathExists(path.join(destination, "artifact.txt")),
+    false,
   );
 });

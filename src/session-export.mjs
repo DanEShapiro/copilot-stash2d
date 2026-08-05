@@ -35,6 +35,9 @@ function stripFencedBlocks(content) {
     const prefix = line.match(/^\s*(?:>\s*)*/)?.[0] ?? "";
     const quoteDepth = (prefix.match(/>/g) ?? []).length;
     const fenceLine = line.slice(prefix.length);
+    if (fence && quoteDepth < fence.quoteDepth) {
+      fence = undefined;
+    }
     if (!fence) {
       const match = fenceLine.match(/^\s*(`{3,}|~{3,})/);
       if (match) {
@@ -81,7 +84,7 @@ function sanitizeUserReferenceContent(content) {
         !/^\s*\S.*?\s+=>\s+(?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)/.test(
           normalized,
         ) &&
-        !/^\s*(?:#|\[|(?:Add|Copy|Export|Find|Get|Import|Invoke|Move|New|Remove|Select|Set|Start|Stop|Test|Where)-[\w-]+)/i.test(
+        !/^\s*(?:\[(?:20\d{2}-|\d{2}:?\d{2}\b|DEBUG\b|ERROR\b|INFO\b|WARN(?:ING)?\b)|(?:Add|Copy|Export|Find|Get|Import|Invoke|Move|New|Remove|Select|Set|Start|Stop|Test|Where)-[\w-]+)/i.test(
           normalized,
         ) &&
         !isDirectoryLimitWarning(normalized)

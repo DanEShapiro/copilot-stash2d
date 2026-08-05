@@ -1,5 +1,4 @@
 import {
-  copyFile,
   lstat,
   mkdir,
   opendir,
@@ -119,6 +118,7 @@ export async function copyTree(
     maxDepth = MAX_ARCHIVE_DEPTH,
     maxDirectories = MAX_ARCHIVE_DIRECTORIES,
     maxEntries = MAX_ARCHIVE_ENTRIES,
+    beforeCopy = async () => {},
   } = {},
 ) {
   const resolvedRoot = await realpath(sourceRoot);
@@ -137,7 +137,10 @@ export async function copyTree(
         `Session artifacts exceed the safety depth limit of ${maxDepth}: ${source}`,
       );
     }
-    const info = await stat(source);
+    const linkInfo = await lstat(source);
+    if (linkInfo.isSymbolicLink()) {
+      throw new Error(`Session artifact symlinks are not supported: ${source}`);
+    }
     const resolved = await realpath(source);
     if (
       resolved !== resolvedRoot &&
@@ -145,6 +148,7 @@ export async function copyTree(
     ) {
       throw new Error(`Session artifact escapes its source directory: ${source}`);
     }
+    const info = await stat(resolved);
     if (info.isDirectory()) {
       directoryCount += 1;
       if (directoryCount > maxDirectories) {
@@ -186,8 +190,12 @@ export async function copyTree(
         `Session artifacts exceed the safety limit of ${maxBytes} total bytes.`,
       );
     }
-    await mkdir(path.dirname(destination), { recursive: true });
-    await copyFile(source, destination);
+    await copyVerifiedFile(
+      source,
+      destination,
+      fileIdentity(info),
+      { beforeCopy },
+    );
     copied.push({
       archivedPath: relativePath.split(path.sep).join("/"),
       byteSize: info.size,

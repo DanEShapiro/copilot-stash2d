@@ -1,6 +1,15 @@
-import { copyFile, lstat, mkdir } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import path from "node:path";
-import { copyTree, pathExists } from "./archive.mjs";
+import {
+  copyTree,
+  MAX_ARCHIVE_BYTES,
+  MAX_ARCHIVE_ENTRIES,
+  pathExists,
+} from "./archive.mjs";
+import {
+  copyVerifiedFile,
+  fileIdentity,
+} from "./secure-files.mjs";
 
 async function assertNotSymlink(filePath) {
   const info = await lstat(filePath);
@@ -23,9 +32,17 @@ export async function copySessionArtifacts(workspacePath, archivePath) {
     if (!info.isFile()) {
       throw new Error(`Session plan is not a regular file: ${planPath}`);
     }
+    if (info.size > MAX_ARCHIVE_BYTES) {
+      throw new Error(
+        `Session plan exceeds the archive safety limit of ${MAX_ARCHIVE_BYTES} bytes.`,
+      );
+    }
     const destination = path.join(archivePath, "SessionState", "plan.md");
-    await mkdir(path.dirname(destination), { recursive: true });
-    await copyFile(planPath, destination);
+    await copyVerifiedFile(
+      planPath,
+      destination,
+      fileIdentity(info),
+    );
     entries.push({
       role: "plan",
       archivedPath: "SessionState/plan.md",
@@ -43,6 +60,11 @@ export async function copySessionArtifacts(workspacePath, archivePath) {
     const copied = await copyTree(
       filesPath,
       path.join(archivePath, "SessionFiles"),
+      {
+        maxBytes: MAX_ARCHIVE_BYTES -
+          entries.reduce((total, entry) => total + entry.byteSize, 0),
+        maxEntries: MAX_ARCHIVE_ENTRIES - entries.length,
+      },
     );
     entries.push(
       ...copied.map((entry) => ({

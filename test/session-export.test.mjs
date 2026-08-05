@@ -105,6 +105,19 @@ test("external reference discovery uses only user-authored content", () => {
   assert.doesNotMatch(markdown, /python/);
 });
 
+test("external reference discovery preserves Markdown links", () => {
+  const markdown = renderUserReferenceMarkdown([
+    {
+      type: "user.message",
+      data: {
+        content: "[Archive this file](/tmp/link.txt)",
+      },
+    },
+  ]);
+
+  assert.match(markdown, /\/tmp\/link\.txt/);
+});
+
 test("external reference discovery ignores quoted Stash2D directory warnings", () => {
   const markdown = renderUserReferenceMarkdown([
     {
@@ -273,6 +286,24 @@ test("blockquoted fences cannot close root-level fences", () => {
 
   assert.doesNotMatch(markdown, /one\.txt/);
   assert.doesNotMatch(markdown, /two\.txt/);
+  assert.match(markdown, /visible\.txt/);
+});
+
+test("leaving a blockquote closes its unclosed fenced block", () => {
+  const markdown = renderUserReferenceMarkdown([
+    {
+      type: "user.message",
+      data: {
+        content: [
+          "> ```sh",
+          "> cat /tmp/hidden.txt",
+          "Keep `/tmp/visible.txt`.",
+        ].join("\n"),
+      },
+    },
+  ]);
+
+  assert.doesNotMatch(markdown, /hidden\.txt/);
   assert.match(markdown, /visible\.txt/);
 });
 
