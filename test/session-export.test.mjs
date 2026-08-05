@@ -146,3 +146,24 @@ test("external reference discovery ignores pasted code and shell transcripts", (
   assert.doesNotMatch(markdown, /Microsoft\.NET/);
   assert.match(markdown, /notes\.txt/);
 });
+
+test("external reference discovery ignores host skill context and command results", () => {
+  const markdown = renderExternalReferenceMarkdown([
+    {
+      type: "user.message",
+      data: {
+        content: [
+          '<skill-context name="generate-pr-description">',
+          "Base directory for this skill: C:\\Users\\me\\.copilot\\skills\\generate-pr-description",
+          "</skill-context>",
+          "Microsoft.SharePoint.Client.dll => C:\\Windows\\Microsoft.NET\\assembly\\GAC_MSIL\\Microsoft.SharePoint.Client.dll",
+          "I moved all our working files here: C:\\Users\\me\\Downloads\\work",
+        ].join("\n"),
+      },
+    },
+  ]);
+
+  assert.doesNotMatch(markdown, /generate-pr-description/);
+  assert.doesNotMatch(markdown, /Microsoft\.SharePoint\.Client\.dll/);
+  assert.match(markdown, /Downloads\\work/);
+});

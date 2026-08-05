@@ -30,11 +30,15 @@ function attachmentSummary(attachments) {
 
 function sanitizeUserReferenceContent(content) {
   return content
+    .replace(/<skill-context\b[^>]*>[\s\S]*?<\/skill-context>/gi, "")
     .replace(/```[\s\S]*?```/g, "")
     .split(/\r?\n/)
     .filter(
       (line) =>
         !/^(?:\s*>{1,2}\s*)?\$[\w:.-]+\s*=/.test(line) &&
+        !/^\s*\S.*?\s+=>\s+(?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)/.test(
+          line,
+        ) &&
         !/^\s*>{1,2}\s*(?:#|\[|(?:Add|Copy|Export|Find|Get|Import|Invoke|Move|New|Remove|Select|Set|Start|Stop|Test|Where)-[\w-]+)/i.test(
           line,
         ) &&
