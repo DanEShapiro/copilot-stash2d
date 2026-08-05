@@ -221,6 +221,7 @@ and stop if the same error repeats:
 | Handoff generation has more than 100 files or 50 MiB available | Save preserves every local file, generates the handoff from a bounded subset, and reports how many optional files were omitted from model attachments. |
 | Apply has more than 100 files or 50 MiB available | Stash2D keeps the core files selected and opens a multi-select chooser for optional files. Directory groups that cannot fit as a whole are split into individually selectable files. If interactive selection is unavailable, only the core files are attached. |
 | Core transcript, handoff, or metadata alone exceeds attachment limits | Apply stops before sending anything. Reduce the oversized core file and retry. |
+| Archive exceeds 6,000 entries, 1,000 directories, 64 levels, or 1 GiB | Save removes the incomplete archive or apply rejects it before attachment. Reduce the archive and retry. |
 
 ## Safety
 
@@ -270,6 +271,8 @@ and stop if the same error repeats:
   directories, or 1,000 inspected entries per referenced directory. Git trees,
   nested repositories, symlinks, and excluded roots are pruned before copying.
 - `Metadata.json` is limited separately to 1 MiB before it is parsed.
+- Complete archives are bounded at 6,000 entries, 1,000 directories, 64
+  levels of nesting, and 1 GiB. Choosers are bounded at 1,000 items.
 - Archives must use `Metadata.json` format version `1`. Archive and session
   artifact symlinks are rejected.
 - Apply attaches only from a private, revalidated temporary snapshot of the

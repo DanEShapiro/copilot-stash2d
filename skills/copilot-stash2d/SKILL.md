@@ -193,6 +193,9 @@ EVAL-INTENT: /stash2d-save -> prompted directory | export the current public Cop
   only the core files.
 - **Core files exceed attachment limits:** report the error and recommend
   reducing the oversized transcript, handoff, or metadata file.
+- **Archive exceeds structural limits:** explain that archives are bounded at
+  6,000 entries, 1,000 directories, 64 levels of nesting, and 1 GiB, with at
+  most 1,000 chooser items. Recommend reducing or regrouping the archive.
 
 Never loop on a failing command. Retry only after a concrete remediation, and
 at most once for the same failure.
