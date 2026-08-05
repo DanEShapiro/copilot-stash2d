@@ -28,6 +28,24 @@ function attachmentSummary(attachments) {
   return `\n\n### Attachments\n\n${json(attachments)}`;
 }
 
+export function renderExternalReferenceMarkdown(events) {
+  const sections = [];
+  for (const event of events) {
+    if (event.ephemeral || event.agentId) {
+      continue;
+    }
+    const data = event.data ?? {};
+    if (event.type === "user.message") {
+      sections.push(
+        `${data.content ?? ""}${attachmentSummary(data.attachments)}`,
+      );
+    } else if (event.type === "tool.execution_start") {
+      sections.push(json(data.arguments ?? {}));
+    }
+  }
+  return sections.join("\n\n");
+}
+
 export function renderSessionMarkdown(events) {
   const sections = [
     "# Copilot Session",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { realpath } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -51,8 +51,10 @@ test("extracts Windows UNC paths", () => {
 
 test("extracts explicit relative paths", () => {
   assert.deepEqual(
-    extractReferencedPaths("Read `./local.txt` and '../shared/input.json'."),
-    ["./local.txt", "../shared/input.json"],
+    extractReferencedPaths(
+      "Read `./local.txt`, '../shared/input.json', and `docs/reference`.",
+    ),
+    ["./local.txt", "docs/reference", "../shared/input.json"],
   );
 });
 
@@ -109,6 +111,86 @@ test("resolves relative references against the active working directory", async 
 
   assert.equal(candidates.length, 1);
   assert.equal(candidates[0].resolvedPath, await realpath(external));
+});
+
+test("groups explicitly referenced directories and copies their files", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "reference");
+  const first = path.join(source, "one.txt");
+  const second = path.join(source, "nested", "two.txt");
+  await writeText(first, "one");
+  await writeText(second, "two");
+
+  const candidates = await discoverExternalContextFiles(
+    `Read every file in \`${source}\`.`,
+    undefined,
+  );
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].kind, "directory");
+  assert.equal(candidates[0].fileCount, 2);
+  assert.deepEqual(
+    candidates[0].files.map((file) => file.relativePath),
+    ["nested\\two.txt", "one.txt"].map((value) =>
+      value.split("\\").join(path.sep),
+    ),
+  );
+
+  const archive = path.join(directory, "archive");
+  const entries = await copyExternalContextFiles(candidates, archive);
+  assert.equal(entries.length, 2);
+  assert.equal(
+    await readFile(
+      path.join(archive, "Context", "001-reference", "nested", "two.txt"),
+      "utf8",
+    ),
+    "two",
+  );
+});
+
+test("skips referenced Git trees and nested repositories", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const repository = path.join(directory, "repository");
+  await writeText(path.join(repository, "tracked.txt"), "tracked");
+  await execFileAsync("git", ["init", "-q", repository]);
+
+  const parent = path.join(directory, "parent");
+  await writeText(path.join(parent, "keep.txt"), "keep");
+  await writeText(path.join(parent, "nested-repo", "nested.txt"), "nested");
+  await execFileAsync("git", ["init", "-q", path.join(parent, "nested-repo")]);
+
+  assert.deepEqual(
+    await discoverExternalContextFiles(`Read \`${repository}\`.`),
+    [],
+  );
+  const candidates = await discoverExternalContextFiles(
+    `Read \`${parent}\`.`,
+  );
+  assert.equal(candidates.length, 1);
+  assert.deepEqual(
+    candidates[0].files.map((file) => file.relativePath),
+    ["keep.txt"],
+  );
+});
+
+test("skips directories that exceed the discovery walk limit", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "large");
+  await writeText(path.join(source, "one.txt"), "one");
+  await writeText(path.join(source, "two.txt"), "two");
+  const warnings = [];
+
+  const candidates = await discoverExternalContextFiles(
+    `Read \`${source}\`.`,
+    undefined,
+    {
+      maxDirectoryFiles: 1,
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.deepEqual(candidates, []);
+  assert.match(warnings[0], /discovery safety limit/);
 });
 
 test("excludes Copilot internals and the active session workspace", async (t) => {
@@ -183,6 +265,29 @@ test("skips external files when Git classification is unavailable", async (t) =>
 
   assert.deepEqual(candidates, []);
   assert.deepEqual(warnings, ["Git unavailable"]);
+});
+
+test("deduplicates varying Git classification warnings", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const first = path.join(directory, "one", "input.txt");
+  const second = path.join(directory, "two", "input.txt");
+  await writeText(first, "one");
+  await writeText(second, "two");
+  const warnings = [];
+
+  const candidates = await discoverExternalContextFiles(
+    `Read \`${first}\` and \`${second}\`.`,
+    undefined,
+    {
+      classifyGitRoot: async (filePath) => ({
+        warning: `Unable to classify ${filePath}`,
+      }),
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.deepEqual(candidates, []);
+  assert.equal(warnings.length, 1);
 });
 
 test("skips inaccessible UNC references instead of aborting discovery", async () => {

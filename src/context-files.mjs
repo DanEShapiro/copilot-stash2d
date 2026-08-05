@@ -1,4 +1,4 @@
-import { copyFile, mkdir, realpath, stat } from "node:fs/promises";
+import { copyFile, mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
@@ -74,12 +74,12 @@ export function extractReferencedPaths(markdown) {
   const patterns = [
     {
       expression:
-        /`((?:~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^`\r\n]+)`/g,
+        /`((?:~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\|[^`\s/\\]+[\\/])[^`\r\n]+)`/g,
       bare: false,
     },
     {
       expression:
-        /["']((?:~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\)[^"'\r\n]+)["']/g,
+        /["']((?:~[\\/]|\.{1,2}[\\/]|\/|[A-Za-z]:[\\/]|\\\\|[^"'\s/\\]+[\\/])[^"'\r\n]+)["']/g,
       bare: false,
     },
     {
@@ -146,6 +146,8 @@ export async function discoverExternalContextFiles(
     classifyGitRoot = gitRootFor,
     resolveRealPath = realpath,
     getFileInfo = stat,
+    maxDirectoryFiles = 10000,
+    maxDirectoryDirectories = 2000,
     onWarning = async () => {},
   } = {},
 ) {
@@ -192,41 +194,198 @@ export async function discoverExternalContextFiles(
   const candidates = [];
   const seen = new Set();
   const skippedCandidateErrors = new Set();
+  const gitClassificationCache = new Map();
 
-  for (const referencedPath of extractReferencedPaths(markdown)) {
-    const absolutePath = path.resolve(baseDirectory, referencedPath);
-    let resolvedPath;
-    let info;
-    try {
-      resolvedPath = await resolveRealPath(absolutePath);
-      info = await getFileInfo(resolvedPath);
-    } catch (error) {
-      skippedCandidateErrors.add(error?.code ?? "unknown error");
-      continue;
+  async function gitClassificationFor(resolvedPath) {
+    const directory = path.dirname(resolvedPath);
+    if (!gitClassificationCache.has(directory)) {
+      gitClassificationCache.set(
+        directory,
+        Promise.resolve(classifyGitRoot(resolvedPath)),
+      );
     }
-    if (!info.isFile() || resolvedPath === sourceRealPath || seen.has(resolvedPath)) {
-      continue;
+    return gitClassificationCache.get(directory);
+  }
+  async function classifyFile(
+    resolvedPath,
+    originalPath,
+    relativePath = path.basename(resolvedPath),
+    { skipGitClassification = false } = {},
+  ) {
+    if (resolvedPath === sourceRealPath || seen.has(resolvedPath)) {
+      return undefined;
     }
     if (ignoredRoots.some((root) => isWithinRoot(resolvedPath, root))) {
-      continue;
+      return undefined;
     }
     seen.add(resolvedPath);
-    const classification = await classifyGitRoot(resolvedPath);
-    if (classification.warning) {
-      if (!warnings.has(classification.warning)) {
-        warnings.add(classification.warning);
-        await onWarning(classification.warning);
+    if (!skipGitClassification) {
+      const classification = await gitClassificationFor(resolvedPath);
+      if (classification.warning) {
+        await warnOnce("git-classification", classification.warning);
+        return undefined;
+      }
+      if (classification.root) {
+        return undefined;
+      }
+    }
+    const info = await getFileInfo(resolvedPath);
+    return {
+      originalPath,
+      resolvedPath,
+      relativePath,
+      byteSize: info.size,
+    };
+  }
+
+  async function collectDirectoryFiles(directoryPath, originalPath) {
+    const rootClassification = await gitClassificationFor(
+      path.join(directoryPath, ".stash2d-directory-probe"),
+    );
+    if (rootClassification.warning) {
+      await warnOnce("git-classification", rootClassification.warning);
+      return [];
+    }
+    if (rootClassification.root) {
+      return [];
+    }
+
+    const files = [];
+    let directoryCount = 0;
+    let limitExceeded = false;
+
+    async function hasGitMarker(directoryPath) {
+      try {
+        await getFileInfo(path.join(directoryPath, ".git"));
+        return true;
+      } catch (error) {
+        if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+          return false;
+        }
+        skippedCandidateErrors.add(error?.code ?? "unknown error");
+        return true;
+      }
+    }
+
+    async function visit(currentPath, relativeRoot = "") {
+      if (limitExceeded) {
+        return;
+      }
+      directoryCount += 1;
+      if (directoryCount > maxDirectoryDirectories) {
+        limitExceeded = true;
+        return;
+      }
+      let entries;
+      try {
+        entries = await readdir(currentPath, { withFileTypes: true });
+      } catch (error) {
+        skippedCandidateErrors.add(error?.code ?? "unknown error");
+        return;
+      }
+      entries.sort((left, right) => left.name.localeCompare(right.name));
+      for (const entry of entries) {
+        if (limitExceeded) {
+          return;
+        }
+        if (entry.isSymbolicLink()) {
+          continue;
+        }
+        if (entry.name === ".git") {
+          continue;
+        }
+        const entryPath = path.join(currentPath, entry.name);
+        const relativePath = path.join(relativeRoot, entry.name);
+        if (entry.isDirectory()) {
+          if (
+            ignoredRoots.some((root) => isWithinRoot(entryPath, root)) ||
+            (await hasGitMarker(entryPath))
+          ) {
+            continue;
+          }
+          await visit(entryPath, relativePath);
+        } else if (entry.isFile()) {
+          if (files.length >= maxDirectoryFiles) {
+            limitExceeded = true;
+            return;
+          }
+          try {
+            const resolvedPath = await resolveRealPath(entryPath);
+            const file = await classifyFile(
+              resolvedPath,
+              originalPath,
+              relativePath,
+              { skipGitClassification: true },
+            );
+            if (file) {
+              files.push(file);
+            }
+          } catch (error) {
+            skippedCandidateErrors.add(error?.code ?? "unknown error");
+          }
+        }
+      }
+    }
+    await visit(directoryPath);
+    if (limitExceeded) {
+      await warnOnce(
+        `directory-limit:${directoryPath}`,
+        `Referenced directory ${directoryPath} exceeds the discovery safety limit of ${maxDirectoryFiles} files or ${maxDirectoryDirectories} directories and was skipped.`,
+      );
+      return [];
+    }
+    return files;
+  }
+
+  const references = [];
+  for (const referencedPath of extractReferencedPaths(markdown)) {
+    const absolutePath = path.resolve(baseDirectory, referencedPath);
+    try {
+      const resolvedPath = await resolveRealPath(absolutePath);
+      references.push({
+        referencedPath,
+        resolvedPath,
+        info: await getFileInfo(resolvedPath),
+      });
+    } catch (error) {
+      skippedCandidateErrors.add(error?.code ?? "unknown error");
+    }
+  }
+
+  references.sort(
+    (left, right) =>
+      Number(right.info.isDirectory()) - Number(left.info.isDirectory()),
+  );
+  for (const { referencedPath, resolvedPath, info } of references) {
+    if (info.isDirectory()) {
+      if (ignoredRoots.some((root) => isWithinRoot(resolvedPath, root))) {
+        continue;
+      }
+      const files = await collectDirectoryFiles(resolvedPath, referencedPath);
+      if (files.length > 0) {
+        candidates.push({
+          kind: "directory",
+          originalPath: referencedPath,
+          resolvedPath,
+          fileCount: files.length,
+          byteSize: files.reduce((total, file) => total + file.byteSize, 0),
+          files,
+        });
       }
       continue;
     }
-    if (classification.root) {
+    if (!info.isFile()) {
       continue;
     }
-    candidates.push({
-      originalPath: referencedPath,
-      resolvedPath,
-      byteSize: info.size,
-    });
+    const file = await classifyFile(resolvedPath, referencedPath);
+    if (file) {
+      candidates.push({
+        kind: "file",
+        ...file,
+        fileCount: 1,
+        files: [file],
+      });
+    }
   }
 
   if (skippedCandidateErrors.size > 0) {
@@ -252,15 +411,41 @@ export async function copyExternalContextFiles(candidates, archivePath) {
 
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
-    const fileName = `${String(index + 1).padStart(3, "0")}-${safeBaseName(candidate.resolvedPath)}`;
-    const archivedPath = path.join("Context", fileName);
-    await copyFile(candidate.resolvedPath, path.join(archivePath, archivedPath));
-    entries.push({
-      originalPath: candidate.originalPath,
-      resolvedSourcePath: candidate.resolvedPath,
-      archivedPath: archivedPath.split(path.sep).join("/"),
-      byteSize: candidate.byteSize,
-    });
+    const prefix = String(index + 1).padStart(3, "0");
+    const files = candidate.files ?? [
+      {
+        originalPath: candidate.originalPath,
+        resolvedPath: candidate.resolvedPath,
+        relativePath: path.basename(candidate.resolvedPath),
+        byteSize: candidate.byteSize,
+      },
+    ];
+    for (const file of files) {
+      const archivedPath =
+        candidate.kind === "directory"
+          ? path.join(
+              "Context",
+              `${prefix}-${safeBaseName(candidate.resolvedPath)}`,
+              ...file.relativePath.split(path.sep).map(safeBaseName),
+            )
+          : path.join(
+              "Context",
+              `${prefix}-${safeBaseName(file.resolvedPath)}`,
+            );
+      await mkdir(path.dirname(path.join(archivePath, archivedPath)), {
+        recursive: true,
+      });
+      await copyFile(
+        file.resolvedPath,
+        path.join(archivePath, archivedPath),
+      );
+      entries.push({
+        originalPath: file.originalPath,
+        resolvedSourcePath: file.resolvedPath,
+        archivedPath: archivedPath.split(path.sep).join("/"),
+        byteSize: file.byteSize,
+      });
+    }
   }
   return entries;
 }

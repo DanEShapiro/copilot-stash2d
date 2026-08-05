@@ -34,7 +34,15 @@ Values can also be supplied inline:
 /stash2d-save --output "~/Downloads" --title "weather API investigation"
 ```
 
-Stash2D may offer to include referenced external files. Git-repository files, Copilot internals, and the active session workspace are excluded.
+Stash2D may offer to include external files or directories referenced by the
+user or passed to tools that actually ran. Paths that only appear in assistant
+prose, tool output, tracebacks, or other generated results are ignored.
+Git-repository files, Copilot internals, and the active session workspace are
+also excluded.
+
+The chooser is a native multi-select list. Referenced directories appear as one
+group with their eligible file count and total size, so a directory can be
+included or skipped without clicking through every child file.
 
 You can also ask naturally, for example, "save this Copilot session so I can
 continue it later." The bundled skill identifies save/apply intent and gives
@@ -198,8 +206,11 @@ and stop if the same error repeats:
 | Public session event API fails | No archive is created. Update or restart Copilot CLI, reload the plugin, and retry once. |
 | `session.workspacePath` is unavailable | Save continues from the public transcript, omits unavailable session artifacts, and warns the user. |
 | Referenced external file is missing or inaccessible | The optional file is skipped with an aggregated warning; save continues. |
+| Referenced directory exceeds 10,000 files or 2,000 directories | The directory candidate is skipped with a warning so discovery cannot block the save indefinitely. Reference a smaller subdirectory or specific files. |
 | Plan/handoff generation fails or times out | Save fails and removes the incomplete archive when possible. Resolve the API/model issue before retrying. |
-| Save or apply exceeds attachment limits | Stash2D rejects more than 100 attachments or 50 MiB of attachments before sending them to Copilot. Remove nonessential `Context/` or `SessionFiles/` entries before retrying. |
+| Handoff generation has more than 100 files or 50 MiB available | Save preserves every local file, generates the handoff from a bounded subset, and reports how many optional files were omitted from model attachments. |
+| Apply has more than 100 files or 50 MiB available | Stash2D keeps the core files selected and opens a multi-select chooser for optional files and directory contents. If interactive selection is unavailable, only the core files are attached. |
+| Core transcript, handoff, or metadata alone exceeds attachment limits | Apply stops before sending anything. Reduce the oversized core file and retry. |
 
 ## Safety
 
@@ -208,9 +219,13 @@ and stop if the same error repeats:
 - Stash2D does not scan or redact any exported source, including the transcript,
   tool output, plan, session artifacts, or approved external context. Treat the
   generated archive as sensitive and redact it before storing or sharing it.
-- Stash2D displays the complete candidate list before offering individual or
-  batch approval. External files are copied only after explicit approval. If
-  interactive confirmation is unavailable, no external files are copied.
+- Stash2D discovers external paths only from user messages, user attachments,
+  and arguments passed to tools that actually ran. It does not turn paths
+  printed in tool output, tracebacks, or assistant prose into candidates.
+- Stash2D displays every candidate in one native multi-select list. Explicitly
+  referenced directories are grouped and show their eligible file count and
+  total size. External content is copied only after explicit approval. If
+  interactive confirmation is unavailable, no external content is copied.
 - Archives are editable, unencrypted, and have no integrity hashes. Store them
   in an access-controlled location and review all contents before sharing.
 - The apply prompt instructs Copilot to treat archived text as untrusted
@@ -231,9 +246,16 @@ and stop if the same error repeats:
 - Stash2D preserves working context, not Copilot authentication, installed
   plugins, settings, or model configuration.
 - Plans and artifacts require the SDK's `session.workspacePath`; transcript-only save remains available without it.
-- Save and apply accept at most 100 attachments totaling 50 MiB. Stash2D does
-  not chunk archives automatically, and model-specific context limits may be
-  lower.
+- Local archives may contain more than 100 files. The 100-file and 50 MiB
+  limits apply to each model attachment operation, not to files preserved on
+  disk. Handoff generation automatically uses a bounded subset while retaining
+  every file in the archive. Apply opens a multi-select chooser when the
+  complete archive exceeds the attachment budget.
+- Stash2D does not automatically chunk one archive across multiple model
+  messages, and model-specific context limits may be lower.
+- External-directory discovery is bounded at 10,000 files or 2,000
+  directories per referenced directory. Git trees, nested repositories,
+  symlinks, and excluded roots are pruned before copying.
 - `Metadata.json` is limited separately to 1 MiB before it is parsed.
 - Archives must use `Metadata.json` format version `1`. Archive and session
   artifact symlinks are rejected.

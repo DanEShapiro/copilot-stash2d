@@ -17,13 +17,15 @@ export function fakeSession(overrides = {}) {
   const logs = [];
   const sent = [];
   const inputRequests = [];
+  const elicitationRequests = [];
   const inputs = [...(overrides.inputs ?? [])];
-  const selections = [...(overrides.selections ?? [])];
+  const elicitations = [...(overrides.elicitations ?? [])];
 
   return {
     logs,
     sent,
     inputRequests,
+    elicitationRequests,
     workspacePath: overrides.workspacePath,
     rpc: {
       metadata: {
@@ -36,11 +38,14 @@ export function fakeSession(overrides = {}) {
       ui: { elicitation: overrides.elicitation ?? true },
     },
     ui: {
+      elicitation: async (params) => {
+        elicitationRequests.push(params);
+        return elicitations.shift() ?? { action: "cancel" };
+      },
       input: async (message, options) => {
         inputRequests.push({ message, options });
         return inputs.shift() ?? null;
       },
-      select: async () => selections.shift() ?? null,
     },
     log: async (message, options) => {
       logs.push({ message, options });

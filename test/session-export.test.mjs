@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderSessionMarkdown } from "../src/session-export.mjs";
+import {
+  renderExternalReferenceMarkdown,
+  renderSessionMarkdown,
+} from "../src/session-export.mjs";
 
 test("renders main-session activity and omits subagent internals", () => {
   const events = [
@@ -67,4 +70,33 @@ test("renders main-session activity and omits subagent internals", () => {
   assert.match(markdown, /file contents/);
   assert.match(markdown, /subagent completed/);
   assert.doesNotMatch(markdown, /internal subagent chatter/);
+});
+
+test("external reference discovery excludes assistant prose and tool output", () => {
+  const markdown = renderExternalReferenceMarkdown([
+    {
+      type: "user.message",
+      data: { content: "Keep `/tmp/user.txt`." },
+    },
+    {
+      type: "assistant.message",
+      data: { content: "Internal `/usr/lib/python/internal.py`." },
+    },
+    {
+      type: "tool.execution_start",
+      data: { arguments: { path: "/tmp/tool.txt" } },
+    },
+    {
+      type: "tool.execution_complete",
+      data: {
+        result: {
+          content: "Traceback in /usr/lib/python/site-packages/runtime.py",
+        },
+      },
+    },
+  ]);
+
+  assert.match(markdown, /user\.txt/);
+  assert.match(markdown, /tool\.txt/);
+  assert.doesNotMatch(markdown, /python/);
 });

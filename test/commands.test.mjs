@@ -7,7 +7,10 @@ import {
   pathExists,
   writeMetadata,
 } from "../src/archive.mjs";
-import { createCommands, sanitizeRemoteUrl } from "../src/commands.mjs";
+import {
+  createCommands,
+  sanitizeRemoteUrl,
+} from "../src/commands.mjs";
 import { fakeSession, temporaryDirectory, writeText } from "./helpers.mjs";
 
 const FIXED_DATE = new Date(2026, 6, 31, 21, 36, 7);
@@ -290,7 +293,7 @@ test("copies only explicitly approved external context during save", async (t) =
   const externalPath = path.join(directory, "Downloads", "input.txt");
   await writeText(externalPath, "input");
   const session = fakeSession({
-    selections: ["Include this file"],
+    elicitations: [{ action: "accept", content: { files: ["0"] } }],
     events: [
       {
         id: "user",
@@ -300,6 +303,7 @@ test("copies only explicitly approved external context during save", async (t) =
       },
     ],
   });
+
   const commands = createCommands({
     session,
     cwd: directory,
@@ -322,10 +326,98 @@ test("copies only explicitly approved external context during save", async (t) =
     "input",
   );
   assert.match(
-    session.logs.find((entry) =>
-      entry.message.startsWith("Review 1 external context file"),
-    ).message,
+    session.elicitationRequests[0].requestedSchema.properties.files.items
+      .anyOf[0].title,
     /input\.txt/,
+  );
+});
+
+test("selects a small external-file subset with the multi-select chooser", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const paths = [];
+  for (let index = 0; index < 5; index += 1) {
+    const filePath = path.join(directory, "Downloads", `${index}.txt`);
+    await writeText(filePath, `${index}`);
+    paths.push(filePath);
+  }
+  const session = fakeSession({
+    elicitations: [{ action: "accept", content: { files: ["1", "4"] } }],
+    events: [
+      {
+        type: "user.message",
+        data: {
+          content: paths.map((filePath) => `\`${filePath}\``).join(" "),
+        },
+      },
+    ],
+  });
+  const commands = createCommands({
+    session,
+    cwd: directory,
+    now: () => new Date(FIXED_DATE),
+  });
+
+  await commands.save(`--output "${directory}" --title "selected files"`);
+
+  const contextPath = path.join(
+    directory,
+    archiveFolderName("selected files", FIXED_DATE),
+    "Context",
+  );
+  assert.deepEqual((await readdir(contextPath)).sort(), [
+    "001-1.txt",
+    "002-4.txt",
+  ]);
+  assert.equal(session.elicitationRequests.length, 1);
+  assert.equal(
+    session.elicitationRequests[0].requestedSchema.properties.files.type,
+    "array",
+  );
+});
+
+test("selects a referenced directory as one grouped item", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "reference");
+  await writeText(path.join(source, "one.txt"), "one");
+  await writeText(path.join(source, "nested", "two.txt"), "two");
+  const session = fakeSession({
+    elicitations: [{ action: "accept", content: { files: ["0"] } }],
+    events: [
+      {
+        type: "user.message",
+        data: { content: `Read every file in \`${source}\`.` },
+      },
+    ],
+  });
+  const commands = createCommands({
+    session,
+    cwd: directory,
+    now: () => new Date(FIXED_DATE),
+  });
+
+  await commands.save(`--output "${directory}" --title "directory group"`);
+
+  const archivePath = path.join(
+    directory,
+    archiveFolderName("directory group", FIXED_DATE),
+  );
+  assert.equal(
+    await readFile(
+      path.join(
+        archivePath,
+        "Context",
+        "001-reference",
+        "nested",
+        "two.txt",
+      ),
+      "utf8",
+    ),
+    "two",
+  );
+  assert.match(
+    session.elicitationRequests[0].requestedSchema.properties.files.items
+      .anyOf[0].title,
+    /2 files/,
   );
 });
 
@@ -334,7 +426,7 @@ test("can cancel external context review without creating an archive", async (t)
   const externalPath = path.join(directory, "Downloads", "input.txt");
   await writeText(externalPath, "input");
   const session = fakeSession({
-    selections: ["Cancel save"],
+    elicitations: [{ action: "cancel" }],
     events: [
       {
         id: "user",
@@ -367,7 +459,7 @@ test("cancelling does not create a new output directory", async (t) => {
   const externalPath = path.join(directory, "Downloads", "input.txt");
   await writeText(externalPath, "input");
   const session = fakeSession({
-    selections: ["Cancel save"],
+    elicitations: [{ action: "cancel" }],
     events: [
       {
         id: "user",
@@ -435,7 +527,7 @@ test("uses safe defaults and skips external context without elicitation", async 
     session.logs.find(({ message }) =>
       message.includes("interactive confirmation is unavailable"),
     ).message,
-    /No external files were copied/,
+    /No optional files were included/,
   );
 });
 
@@ -526,7 +618,7 @@ test("reports public attachment API failures explicitly", async (t) => {
   );
 });
 
-test("rejects oversized archives before apply attachments are sent", async (t) => {
+test("lets users select a bounded subset when apply exceeds attachment limits", async (t) => {
   const directory = await temporaryDirectory(t);
   const archivePath = path.join(directory, "archive");
   await writeText(path.join(archivePath, "Session.md"), "session");
@@ -538,17 +630,50 @@ test("rejects oversized archives before apply attachments are sent", async (t) =
       "content",
     );
   }
-  const session = fakeSession();
+  const session = fakeSession({
+    elicitations: [{ action: "accept", content: { files: ["0", "1"] } }],
+  });
   const commands = createCommands({ session, cwd: directory });
 
-  await assert.rejects(
-    commands.apply(`"${archivePath}"`),
-    /requires 101 attachments.*safety limit is 100/,
+  await commands.apply(`"${archivePath}"`);
+
+  assert.equal(session.sent.length, 1);
+  assert.deepEqual(
+    session.sent[0].attachments.map((attachment) => attachment.displayName),
+    ["Handoff.md", "Session.md", "Metadata.json", "SessionFiles/0.txt", "SessionFiles/1.txt"],
   );
-  assert.equal(session.sent.length, 0);
 });
 
-test("rejects oversized save attachments and removes the incomplete archive", async (t) => {
+test("applies only core files when an oversized archive is noninteractive", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const archivePath = path.join(directory, "archive");
+  await writeText(path.join(archivePath, "Session.md"), "session");
+  await writeText(path.join(archivePath, "Handoff.md"), "handoff");
+  await writeMetadata(archivePath, { formatVersion: 1 });
+  for (let index = 0; index < 98; index += 1) {
+    await writeText(
+      path.join(archivePath, "SessionFiles", `${index}.txt`),
+      "content",
+    );
+  }
+  const session = fakeSession({ elicitation: false });
+  const commands = createCommands({ session, cwd: directory });
+
+  await commands.apply(`"${archivePath}"`);
+
+  assert.deepEqual(
+    session.sent[0].attachments.map((attachment) => attachment.displayName),
+    ["Handoff.md", "Session.md", "Metadata.json"],
+  );
+  assert.match(
+    session.logs.find(({ message }) =>
+      message.includes("interactive confirmation is unavailable"),
+    ).message,
+    /No optional files were included/,
+  );
+});
+
+test("saves archives with more files than the model attachment limit", async (t) => {
   const directory = await temporaryDirectory(t);
   const workspacePath = path.join(directory, "workspace");
   const outputDirectory = path.join(directory, "output");
@@ -566,47 +691,25 @@ test("rejects oversized save attachments and removes the incomplete archive", as
     now: () => new Date(FIXED_DATE),
   });
 
-  await assert.rejects(
-    commands.save(
-      `--output "${outputDirectory}" --title "oversized save"`,
-    ),
-    /requires 102 attachments.*safety limit is 100/,
+  await commands.save(
+    `--output "${outputDirectory}" --title "oversized save"`,
   );
-  assert.deepEqual(await readdir(outputDirectory), []);
-  assert.equal(session.sent.length, 0);
-});
 
-test("does not report a save that would exceed apply attachment limits", async (t) => {
-  const directory = await temporaryDirectory(t);
-  const workspacePath = path.join(directory, "workspace");
-  const outputDirectory = path.join(directory, "output");
-  await writeText(path.join(workspacePath, "plan.md"), "# Existing plan");
-  for (let index = 0; index < 97; index += 1) {
-    await writeText(
-      path.join(workspacePath, "files", `${index}.txt`),
-      "content",
-    );
-  }
-  const session = fakeSession({ workspacePath });
-  const commands = createCommands({
-    session,
-    cwd: directory,
-    now: () => new Date(FIXED_DATE),
-  });
-
-  await assert.rejects(
-    commands.save(
-      `--output "${outputDirectory}" --title "apply oversized"`,
-    ),
-    /Saved archive apply requires 101 attachments.*safety limit is 100/,
+  const archivePath = path.join(
+    outputDirectory,
+    archiveFolderName("oversized save", FIXED_DATE),
   );
-  assert.deepEqual(await readdir(outputDirectory), []);
   assert.equal(
-    session.logs.some(({ message }) =>
-      message.startsWith("Saved portable Copilot archive"),
-    ),
-    false,
+    (await readdir(path.join(archivePath, "SessionFiles"))).length,
+    100,
   );
+  assert.match(
+    session.logs.find(({ message }) =>
+      message.startsWith("Handoff generation omitted"),
+    ).message,
+    /optional file/,
+  );
+  assert.match(session.logs.at(-1).message, /Saved portable/);
 });
 
 test("rejects archive output inside the session files tree", async (t) => {

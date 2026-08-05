@@ -68,10 +68,14 @@ archive validation, and archive attachment.
    It does not copy Copilot authentication, installed plugins, settings, or
    model configuration; clarify this when the user asks to preserve
    "configuration."
-3. Explain that Stash2D displays the complete discovered external-file list
-   before offering individual or batch approval. It excludes Git-repository
-   files, Copilot internals, and the active session workspace. If interactive
-   confirmation is unavailable, it copies no external files.
+3. Explain that Stash2D discovers external paths only from user messages, user
+   attachments, and arguments passed to tools that actually ran. Paths printed
+   only in assistant prose, tool output, or tracebacks are ignored. It displays
+   every candidate in one native multi-select list. Explicitly referenced
+   directories appear as grouped candidates with their eligible file count and
+   total size. It excludes Git-repository files, Copilot internals, and the
+   active session workspace. If interactive confirmation is unavailable, it
+   copies no external content.
 4. State the expected result: a timestamped directory containing `Session.md`,
    `Handoff.md`, `Metadata.json`, and any available `SessionState/`,
    `SessionFiles/`, and approved `Context/` files.
@@ -94,7 +98,9 @@ archive validation, and archive attachment.
    when interactive elicitation is available. Cancelling that prompt attaches
    nothing.
 2. Explain that apply validates the directory and metadata before attaching
-   archive files to the new session.
+   archive files to the new session. If optional files exceed the attachment
+   budget, Stash2D keeps the core files selected and opens a multi-select
+   chooser for the optional content.
 3. Explain that apply uses a safety prompt instructing Copilot to treat archived
    text as untrusted historical data, summarize recovered state, and wait for
    the user's current instruction. This is prompt-based protection, not a
@@ -162,12 +168,20 @@ EVAL-INTENT: /stash2d-save -> prompted directory | export the current public Cop
   omitted; save can continue from the public transcript and generate a plan.
 - **External path inaccessible:** explain that optional path was skipped. Do
   not turn an unavailable external file into a fatal save error.
+- **Referenced directory exceeds discovery limits:** explain that directories
+  above 10,000 files or 2,000 directories are skipped to prevent an unbounded
+  walk. Recommend referencing a smaller subdirectory or specific files.
 - **Generation or attachment failure:** report the original error. Save removes
   its incomplete archive when possible. There are no automatic retries.
-- **Save or apply exceeds attachment limits:** Stash2D rejects more than 100
-  attachments or 50 MiB before sending them to Copilot. It does not chunk
-  automatically. Recommend making a copy and removing nonessential `Context/`
-  or `SessionFiles/` entries.
+- **Handoff generation exceeds attachment limits:** Save preserves every local
+  archive file and generates the handoff from a bounded subset, reporting the
+  optional files omitted from model attachments.
+- **Apply exceeds attachment limits:** Stash2D keeps the core handoff,
+  transcript, and metadata selected and opens a native multi-select chooser for
+  optional content. Without interactive selection, it attaches only the core
+  files.
+- **Core files exceed attachment limits:** report the error and recommend
+  reducing the oversized transcript, handoff, or metadata file.
 
 Never loop on a failing command. Retry only after a concrete remediation, and
 at most once for the same failure.
