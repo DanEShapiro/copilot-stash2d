@@ -169,7 +169,7 @@ EVAL-INTENT: /stash2d-save -> prompted directory | export the current public Cop
 - **External path inaccessible:** explain that optional path was skipped. Do
   not turn an unavailable external file into a fatal save error.
 - **Referenced directory exceeds discovery limits:** explain that directories
-  above 1,000 files or 200 directories are skipped to prevent an unbounded
+  above 200 files or 50 directories are skipped to prevent an unbounded
   walk. Recommend referencing a smaller subdirectory or specific files.
 - **Generation or attachment failure:** report the original error. Save removes
   its incomplete archive when possible. There are no automatic retries.

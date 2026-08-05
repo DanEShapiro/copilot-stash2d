@@ -152,8 +152,8 @@ export async function discoverExternalContextFiles(
     classifyGitRoot = gitRootFor,
     resolveRealPath = realpath,
     getFileInfo = stat,
-    maxDirectoryFiles = 1000,
-    maxDirectoryDirectories = 200,
+    maxDirectoryFiles = 200,
+    maxDirectoryDirectories = 50,
     onWarning = async () => {},
   } = {},
 ) {
