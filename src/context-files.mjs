@@ -1,4 +1,11 @@
-import { copyFile, mkdir, readdir, realpath, stat } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  stat,
+} from "node:fs/promises";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
@@ -42,13 +49,22 @@ export function copilotInternalRoots({
   return [...roots].map((root) => platformPath.resolve(root));
 }
 
-function cleanCandidate(value) {
+function cleanCandidate(
+  value,
+  {
+    expandHome = true,
+    homeDirectory = os.homedir(),
+  } = {},
+) {
   let candidate = value.trim();
   candidate = candidate.replace(/^file:\/\//, "");
   candidate = candidate.replace(/[),.;:]+$/g, "");
   candidate = candidate.replace(/:(?:\d+)(?::\d+)?$/g, "");
-  if (candidate.startsWith("~/") || candidate.startsWith("~\\")) {
-    candidate = path.join(os.homedir(), candidate.slice(2));
+  if (
+    expandHome &&
+    (candidate.startsWith("~/") || candidate.startsWith("~\\"))
+  ) {
+    candidate = path.join(homeDirectory, candidate.slice(2));
   }
   return candidate;
 }
@@ -69,8 +85,11 @@ function splitFusedPaths(value) {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-export function extractReferencedPaths(markdown) {
-  const values = new Set();
+function extractReferencedPathReferences(
+  markdown,
+  { homeDirectory = os.homedir() } = {},
+) {
+  const values = new Map();
   const patterns = [
     {
       expression:
@@ -94,7 +113,9 @@ export function extractReferencedPaths(markdown) {
         continue;
       }
       for (const fragment of splitFusedPaths(match[1])) {
-        const candidate = cleanCandidate(fragment);
+        const originalPath = cleanCandidate(fragment, { expandHome: false });
+        const referencedPath = cleanCandidate(fragment, { homeDirectory });
+        const candidate = referencedPath;
         if (candidate.startsWith("//")) {
           continue;
         }
@@ -106,27 +127,50 @@ export function extractReferencedPaths(markdown) {
           continue;
         }
         if (candidate) {
-          values.add(candidate);
+          values.set(`${originalPath}\0${referencedPath}`, {
+            originalPath,
+            referencedPath,
+          });
         }
       }
     }
   }
-  return [...values];
+  return [...values.values()];
 }
 
-function hasDirectoryReferenceIntent(markdown, referencedPath) {
-  const escapedPath = referencedPath.replaceAll("\\", "\\\\");
+export function extractReferencedPaths(markdown, options) {
+  return [
+    ...new Set(
+      extractReferencedPathReferences(markdown, options).map(
+        ({ referencedPath }) => referencedPath,
+      ),
+    ),
+  ];
+}
+
+function hasDirectoryReferenceIntent(markdown, originalPath, homeDirectory) {
   const intent =
-    /\b(?:analy[sz]e|archive|copy|include|inspect|keep|look|open|read|review|save|scan|search|use)\b|\b(?:directories|directory|files|folder|folders|tree)\b/i;
+    /\b(?:analy[sz](?:e|ed|ing)|archiv(?:e|ed|ing)|cop(?:y|ied|ying)|includ(?:e|ed|ing)|inspect(?:ed|ing)?|keep|kept|look(?:ed|ing)?|mov(?:e|ed|ing)|open(?:ed|ing)?|put|read(?:ing)?|review(?:ed|ing)?|sav(?:e|ed|ing)|scan(?:ned|ning)?|search(?:ed|ing)?|stor(?:e|ed|ing)|use(?:d|ing)?)\b/i;
   return markdown
     .split(/\r?\n/)
     .some((line) => {
-      if (!line.includes(referencedPath) && !line.includes(escapedPath)) {
+      const lineReferences = extractReferencedPathReferences(line, {
+        homeDirectory,
+      });
+      if (
+        !lineReferences.some(
+          (reference) => reference.originalPath === originalPath,
+        )
+      ) {
         return false;
       }
-      const surroundingText = line
-        .replaceAll(referencedPath, "")
-        .replaceAll(escapedPath, "");
+      if (/^\s*"path"\s*:/.test(line)) {
+        return true;
+      }
+      const surroundingText = lineReferences.reduce(
+        (text, reference) => text.replaceAll(reference.originalPath, ""),
+        line,
+      );
       return intent.test(surroundingText);
     });
 }
@@ -165,6 +209,7 @@ export async function discoverExternalContextFiles(
   sourcePath,
   {
     baseDirectory = process.cwd(),
+    homeDirectory = os.homedir(),
     excludedRoots = [],
     classifyGitRoot = gitRootFor,
     resolveRealPath = realpath,
@@ -196,7 +241,7 @@ export async function discoverExternalContextFiles(
     }
   }
   const configuredRoots = [
-    ...copilotInternalRoots(),
+    ...copilotInternalRoots({ homeDirectory }),
     ...excludedRoots.filter(Boolean),
   ];
   const ignoredRoots = await Promise.all(
@@ -245,7 +290,6 @@ export async function discoverExternalContextFiles(
     if (ignoredRoots.some((root) => isWithinRoot(resolvedPath, root))) {
       return undefined;
     }
-    (pendingSeen ?? seen).add(resolvedPath);
     if (!skipGitClassification) {
       const classification = await gitClassificationFor(resolvedPath);
       if (classification.warning) {
@@ -257,6 +301,7 @@ export async function discoverExternalContextFiles(
       }
     }
     const info = await getFileInfo(resolvedPath);
+    (pendingSeen ?? seen).add(resolvedPath);
     return {
       originalPath,
       resolvedPath,
@@ -265,7 +310,11 @@ export async function discoverExternalContextFiles(
     };
   }
 
-  async function collectDirectoryFiles(directoryPath, originalPath) {
+  async function collectDirectoryFiles(
+    directoryPath,
+    originalPath,
+    explicitFilePaths,
+  ) {
     const rootClassification = await gitClassificationFor(
       path.join(directoryPath, ".stash2d-directory-probe"),
     );
@@ -339,6 +388,9 @@ export async function discoverExternalContextFiles(
           }
           try {
             const resolvedPath = await resolveRealPath(entryPath);
+            if (explicitFilePaths.has(resolvedPath)) {
+              continue;
+            }
             const file = await classifyFile(
               resolvedPath,
               originalPath,
@@ -369,18 +421,22 @@ export async function discoverExternalContextFiles(
   }
 
   const references = [];
-  for (const referencedPath of extractReferencedPaths(markdown)) {
+  for (const { originalPath, referencedPath } of extractReferencedPathReferences(
+    markdown,
+    { homeDirectory },
+  )) {
     const absolutePath = path.resolve(baseDirectory, referencedPath);
     try {
       const resolvedPath = await resolveRealPath(absolutePath);
       const info = await getFileInfo(resolvedPath);
       if (
         info.isDirectory() &&
-        !hasDirectoryReferenceIntent(markdown, referencedPath)
+        !hasDirectoryReferenceIntent(markdown, originalPath, homeDirectory)
       ) {
         continue;
       }
       references.push({
+        originalPath,
         referencedPath,
         resolvedPath,
         info,
@@ -394,16 +450,25 @@ export async function discoverExternalContextFiles(
     (left, right) =>
       Number(right.info.isDirectory()) - Number(left.info.isDirectory()),
   );
-  for (const { referencedPath, resolvedPath, info } of references) {
+  const explicitFilePaths = new Set(
+    references
+      .filter(({ info }) => info.isFile())
+      .map(({ resolvedPath }) => resolvedPath),
+  );
+  for (const { originalPath, resolvedPath, info } of references) {
     if (info.isDirectory()) {
       if (ignoredRoots.some((root) => isWithinRoot(resolvedPath, root))) {
         continue;
       }
-      const files = await collectDirectoryFiles(resolvedPath, referencedPath);
+      const files = await collectDirectoryFiles(
+        resolvedPath,
+        originalPath,
+        explicitFilePaths,
+      );
       if (files.length > 0) {
         candidates.push({
           kind: "directory",
-          originalPath: referencedPath,
+          originalPath,
           resolvedPath,
           fileCount: files.length,
           byteSize: files.reduce((total, file) => total + file.byteSize, 0),
@@ -415,14 +480,18 @@ export async function discoverExternalContextFiles(
     if (!info.isFile()) {
       continue;
     }
-    const file = await classifyFile(resolvedPath, referencedPath);
-    if (file) {
-      candidates.push({
-        kind: "file",
-        ...file,
-        fileCount: 1,
-        files: [file],
-      });
+    try {
+      const file = await classifyFile(resolvedPath, originalPath);
+      if (file) {
+        candidates.push({
+          kind: "file",
+          ...file,
+          fileCount: 1,
+          files: [file],
+        });
+      }
+    } catch (error) {
+      skippedCandidateErrors.add(error?.code ?? "unknown error");
     }
   }
 
@@ -439,13 +508,23 @@ function safeBaseName(filePath) {
   return path.basename(filePath).replace(/[\u0000-\u001f<>:"/\\|?*]/g, "_");
 }
 
-export async function copyExternalContextFiles(candidates, archivePath) {
+export async function copyExternalContextFiles(
+  candidates,
+  archivePath,
+  {
+    copyContextFile = copyFile,
+    getContextFileInfo = stat,
+    onWarning = async () => {},
+    openContextFile = open,
+  } = {},
+) {
   const entries = [];
   if (candidates.length === 0) {
     return entries;
   }
   const contextPath = path.join(archivePath, "Context");
   await mkdir(contextPath, { recursive: true });
+  const skippedSourceErrors = new Set();
 
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
@@ -473,10 +552,28 @@ export async function copyExternalContextFiles(candidates, archivePath) {
       await mkdir(path.dirname(path.join(archivePath, archivedPath)), {
         recursive: true,
       });
-      await copyFile(
-        file.resolvedPath,
-        path.join(archivePath, archivedPath),
-      );
+      try {
+        await copyContextFile(
+          file.resolvedPath,
+          path.join(archivePath, archivedPath),
+        );
+      } catch (error) {
+        let sourceUnavailable = false;
+        let handle;
+        try {
+          await getContextFileInfo(file.resolvedPath);
+          handle = await openContextFile(file.resolvedPath, "r");
+        } catch {
+          sourceUnavailable = true;
+        } finally {
+          await handle?.close().catch(() => {});
+        }
+        if (sourceUnavailable) {
+          skippedSourceErrors.add(error?.code ?? "unknown error");
+          continue;
+        }
+        throw error;
+      }
       entries.push({
         originalPath: file.originalPath,
         resolvedSourcePath: file.resolvedPath,
@@ -484,6 +581,11 @@ export async function copyExternalContextFiles(candidates, archivePath) {
         byteSize: file.byteSize,
       });
     }
+  }
+  if (skippedSourceErrors.size > 0) {
+    await onWarning(
+      `Some approved optional context files became unavailable while the archive was being created and were skipped (${[...skippedSourceErrors].join(", ")}).`,
+    );
   }
   return entries;
 }

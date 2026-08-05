@@ -167,3 +167,30 @@ test("external reference discovery ignores host skill context and command result
   assert.doesNotMatch(markdown, /Microsoft\.SharePoint\.Client\.dll/);
   assert.match(markdown, /Downloads\\work/);
 });
+
+test("external reference discovery ignores shell prompts and stack frames", () => {
+  const markdown = renderExternalReferenceMarkdown([
+    {
+      type: "user.message",
+      data: {
+        content: [
+          "PS C:\\src\\app> Get-Content C:\\Users\\me\\.ssh\\config",
+          "C:\\src\\app> type C:\\secrets.txt",
+          "$ cat /etc/shadow",
+          "alice@host:/work$ cat /home/alice/token.txt",
+          '  File "/home/me/app/creds.py", line 8, in load',
+          "    at Object.<anonymous> (C:\\src\\app\\index.js:12:9)",
+          "Please keep `C:\\Users\\me\\notes.txt`.",
+        ].join("\n"),
+      },
+    },
+  ]);
+
+  assert.doesNotMatch(markdown, /\.ssh\\config/);
+  assert.doesNotMatch(markdown, /secrets\.txt/);
+  assert.doesNotMatch(markdown, /etc\/shadow/);
+  assert.doesNotMatch(markdown, /token\.txt/);
+  assert.doesNotMatch(markdown, /creds\.py/);
+  assert.doesNotMatch(markdown, /index\.js/);
+  assert.match(markdown, /notes\.txt/);
+});

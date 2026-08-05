@@ -36,6 +36,11 @@ function sanitizeUserReferenceContent(content) {
     .filter(
       (line) =>
         !/^(?:\s*>{1,2}\s*)?\$[\w:.-]+\s*=/.test(line) &&
+        !/^\s*(?:PS\s+[A-Za-z]:\\[^>]*>|[A-Za-z]:\\[^>]*>|\$\s+|[^\s@]+@[^\s:]+:[^$#]*[$#]\s+)/.test(
+          line,
+        ) &&
+        !/^\s*File\s+["'][^"']+["'],\s+line\s+\d+/i.test(line) &&
+        !/^\s*at\s+(?:.+?\s+\()?[^()\s]+:\d+:\d+\)?\s*$/.test(line) &&
         !/^\s*\S.*?\s+=>\s+(?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)/.test(
           line,
         ) &&

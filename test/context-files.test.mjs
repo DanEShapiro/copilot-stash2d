@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { readFile, realpath } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+} from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -170,6 +177,102 @@ test("does not traverse a directory mentioned without archive intent", async (t)
   assert.deepEqual(candidates, []);
 });
 
+test("does not treat directory nouns or child file references as directory intent", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "Downloads");
+  const report = path.join(source, "report.pdf");
+  await writeText(report, "report");
+  await writeText(path.join(source, "private.txt"), "private");
+
+  assert.deepEqual(
+    await discoverExternalContextFiles(
+      `My files are in ${source}, unrelated question about the weather.`,
+    ),
+    [],
+  );
+
+  const candidates = await discoverExternalContextFiles(
+    `I cleaned up ${source} yesterday.\nRead \`${report}\` for the numbers.`,
+  );
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].kind, "file");
+  assert.equal(candidates[0].resolvedPath, await realpath(report));
+});
+
+test("does not borrow intent from trailing-separator or prefix-sibling paths", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const project = path.join(directory, "project");
+  const projectFile = path.join(project, "src", "main.ts");
+  const log = path.join(directory, "log");
+  const logFile = path.join(directory, "logs", "error.txt");
+  await writeText(path.join(project, "secret.env"), "secret");
+  await writeText(projectFile, "main");
+  await writeText(path.join(log, "old.txt"), "old");
+  await writeText(logFile, "error");
+
+  const candidates = await discoverExternalContextFiles(
+    [
+      `My project lives in ${project}${path.sep} by the way.`,
+      `Please read \`${projectFile}\` and explain it.`,
+      `${log} is where things go.`,
+      `Read \`${logFile}\` for details.`,
+    ].join("\n"),
+  );
+
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.resolvedPath).sort(),
+    [await realpath(projectFile), await realpath(logFile)].sort(),
+  );
+  assert.ok(candidates.every((candidate) => candidate.kind === "file"));
+});
+
+test("keeps explicitly referenced files separate from approved directory groups", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "reference");
+  const report = path.join(source, "report.pdf");
+  await writeText(report, "report");
+  await writeText(path.join(source, "other.txt"), "other");
+
+  const candidates = await discoverExternalContextFiles(
+    `Archive \`${source}\` and keep \`${report}\`.`,
+  );
+
+  assert.equal(candidates.length, 2);
+  const directoryCandidate = candidates.find(
+    (candidate) => candidate.kind === "directory",
+  );
+  const fileCandidate = candidates.find((candidate) => candidate.kind === "file");
+  assert.deepEqual(
+    directoryCandidate.files.map((file) => file.relativePath),
+    ["other.txt"],
+  );
+  assert.equal(fileCandidate.resolvedPath, await realpath(report));
+});
+
+test("recognizes intent for home-relative directories and attachment paths", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const homeDirectory = path.join(directory, "home");
+  const notes = path.join(homeDirectory, "notes");
+  await writeText(path.join(notes, "one.txt"), "one");
+
+  const homeCandidates = await discoverExternalContextFiles(
+    "Read every file in `~/notes`.",
+    undefined,
+    { homeDirectory },
+  );
+  assert.equal(homeCandidates.length, 1);
+  assert.equal(homeCandidates[0].kind, "directory");
+  assert.equal(homeCandidates[0].originalPath, "~/notes");
+
+  const attachmentCandidates = await discoverExternalContextFiles(
+    `{\n  "type": "file",\n  "path": "${notes.replaceAll("\\", "\\\\")}"\n}`,
+    undefined,
+    { homeDirectory },
+  );
+  assert.equal(attachmentCandidates.length, 1);
+  assert.equal(attachmentCandidates[0].kind, "directory");
+});
+
 test("skips referenced Git trees and nested repositories", async (t) => {
   const directory = await temporaryDirectory(t);
   const repository = path.join(directory, "repository");
@@ -221,6 +324,7 @@ test("keeps explicit files when their parent directory exceeds the walk limit", 
   const first = path.join(source, "one.txt");
   await writeText(first, "one");
   await writeText(path.join(source, "two.txt"), "two");
+  await writeText(path.join(source, "three.txt"), "three");
 
   const candidates = await discoverExternalContextFiles(
     `Read \`${source}\` and \`${first}\`.`,
@@ -286,6 +390,92 @@ test("copies approved external context with collision-safe names", async (t) => 
 
   assert.equal(entries[0].archivedPath, "Context/001-input.txt");
   assert.equal(entries[1].archivedPath, "Context/002-input.txt");
+});
+
+test("skips approved source files that disappear during copying", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const missing = path.join(directory, "missing.txt");
+  const available = path.join(directory, "available.txt");
+  await writeText(missing, "missing");
+  await writeText(available, "available");
+  const warnings = [];
+
+  const entries = await copyExternalContextFiles(
+    [
+      {
+        originalPath: missing,
+        resolvedPath: missing,
+        byteSize: 7,
+      },
+      {
+        originalPath: available,
+        resolvedPath: available,
+        byteSize: 9,
+      },
+    ],
+    path.join(directory, "archive"),
+    {
+      copyContextFile: async (source, destination) => {
+        if (source === missing) {
+          await rm(source);
+        }
+        await copyFile(source, destination);
+      },
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].resolvedSourcePath, available);
+  assert.match(warnings[0], /became unavailable/);
+  assert.match(warnings[0], /ENOENT/);
+});
+
+test("does not hide archive destination copy failures", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "source.txt");
+  const archive = path.join(directory, "archive");
+  const destination = path.join(archive, "Context", "001-source.txt");
+  await writeText(source, "source");
+  await mkdir(destination, { recursive: true });
+
+  await assert.rejects(
+    copyExternalContextFiles(
+      [{ originalPath: source, resolvedPath: source, byteSize: 6 }],
+      archive,
+    ),
+    /EPERM|EISDIR|EACCES/,
+  );
+});
+
+test("warns when a referenced file vanishes during classification", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const external = path.join(directory, "input.txt");
+  await writeText(external, "input");
+  const warnings = [];
+  let targetStats = 0;
+
+  const candidates = await discoverExternalContextFiles(
+    `Read \`${external}\`.`,
+    undefined,
+    {
+      classifyGitRoot: async () => ({}),
+      getFileInfo: async (filePath) => {
+        if (filePath === await realpath(external)) {
+          targetStats += 1;
+          if (targetStats === 2) {
+            throw Object.assign(new Error("file vanished"), { code: "ENOENT" });
+          }
+        }
+        return stat(filePath);
+      },
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.deepEqual(candidates, []);
+  assert.match(warnings[0], /could not be inspected/);
+  assert.match(warnings[0], /ENOENT/);
 });
 
 test("skips external files when Git classification is unavailable", async (t) => {

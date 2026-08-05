@@ -583,6 +583,10 @@ export function createCommands({
           const externalContext = await copyExternalContextFiles(
             contextReview.approved,
             archivePath,
+            {
+              onWarning: (message) =>
+                session.log(message, { level: "warning" }),
+            },
           );
           const sourceAttachments = [fileAttachment(archivePath, "Session.md")];
           if (!sessionArtifacts.hasPlan) {
