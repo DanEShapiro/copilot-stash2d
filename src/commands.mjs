@@ -134,11 +134,14 @@ export function sanitizeRemoteUrl(remote) {
   }
   try {
     const parsed = new URL(remote);
-    if (!parsed.username && !parsed.password) {
+    const isHttp = ["http:", "https:"].includes(parsed.protocol);
+    if (!parsed.password && !(isHttp && parsed.username)) {
       return remote;
     }
-    parsed.username = "";
     parsed.password = "";
+    if (isHttp) {
+      parsed.username = "";
+    }
     return parsed.toString();
   } catch {
     return remote;

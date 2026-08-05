@@ -34,6 +34,14 @@ test("splits colon-joined paths and keeps line-number suffixes usable", () => {
   );
 });
 
+test("preserves JSON-escaped Windows drive paths", () => {
+  const escapedPath = String.raw`C:\\Users\\me\\config.json`;
+  assert.deepEqual(
+    extractReferencedPaths(`{"path":"${escapedPath}"}`),
+    [escapedPath],
+  );
+});
+
 test("extracts Windows UNC paths", () => {
   assert.deepEqual(
     extractReferencedPaths("Read `\\\\server\\share\\folder\\input.txt`."),

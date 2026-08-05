@@ -21,6 +21,14 @@ test("removes credentials from repository remote URLs", () => {
     sanitizeRemoteUrl("git@github.com:org/repo.git"),
     "git@github.com:org/repo.git",
   );
+  assert.equal(
+    sanitizeRemoteUrl("ssh://git@github.com/org/repo.git"),
+    "ssh://git@github.com/org/repo.git",
+  );
+  assert.equal(
+    sanitizeRemoteUrl("ssh://alice:secret@host/repo.git"),
+    "ssh://alice@host/repo.git",
+  );
 });
 
 test("saves a complete portable archive directly from public events", async (t) => {
@@ -393,6 +401,42 @@ test("cancelling save title or destination prompts creates no archive", async (t
   await createCommands({ session: outputSession, cwd: directory }).save("");
   assert.match(outputSession.logs.at(-1).message, /save cancelled/i);
   assert.deepEqual(await readdir(directory), []);
+});
+
+test("uses safe defaults and skips external context without elicitation", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const externalPath = path.join(directory, "external.txt");
+  await writeText(externalPath, "external");
+  const session = fakeSession({
+    elicitation: false,
+    metadataWorkingDirectory: directory,
+    events: [
+      {
+        type: "user.message",
+        data: { content: `Read \`${externalPath}\`.` },
+      },
+    ],
+  });
+  const commands = createCommands({
+    session,
+    cwd: path.join(directory, "initial"),
+    now: () => new Date(FIXED_DATE),
+  });
+
+  await commands.save("");
+
+  const archivePath = path.join(
+    directory,
+    archiveFolderName("session", FIXED_DATE),
+  );
+  assert.equal(await pathExists(archivePath), true);
+  assert.equal(await pathExists(path.join(archivePath, "Context")), false);
+  assert.match(
+    session.logs.find(({ message }) =>
+      message.includes("interactive confirmation is unavailable"),
+    ).message,
+    /No external files were copied/,
+  );
 });
 
 test("reports a friendly error for a duplicate archive destination", async (t) => {

@@ -139,9 +139,7 @@ computer, start a new Copilot session and enter
 sharing it; applying treats archived text as untrusted and waits for your
 current instruction. No archive was created in evaluation mode.
 
-EVAL-INTENT: /stash2d-save -> prompted directory | export the current public
-Copilot session after external-file review | expects: timestamped portable
-archive
+EVAL-INTENT: /stash2d-save -> prompted directory | export the current public Copilot session after external-file review | expects: timestamped portable archive
 ```
 
 ## Failure handling

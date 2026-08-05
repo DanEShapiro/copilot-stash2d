@@ -54,10 +54,19 @@ function cleanCandidate(value) {
 }
 
 function splitFusedPaths(value) {
-  return value
-    .split(/:(?=(?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\))/)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const separators = [
+    ...value.matchAll(/:(?=(?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\))/g),
+  ].filter(
+    (match) => !(match.index === 1 && /^[A-Za-z]$/.test(value[0])),
+  );
+  const parts = [];
+  let start = 0;
+  for (const separator of separators) {
+    parts.push(value.slice(start, separator.index));
+    start = separator.index + 1;
+  }
+  parts.push(value.slice(start));
+  return parts.map((part) => part.trim()).filter(Boolean);
 }
 
 export function extractReferencedPaths(markdown) {
