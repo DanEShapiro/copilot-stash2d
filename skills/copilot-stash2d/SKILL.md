@@ -59,7 +59,9 @@ archive validation, and archive attachment.
    Omit unknown flags. The command will ask for a title and destination when
    interactive input is available; otherwise omitted values default to the
    title `session` and the user's `Downloads` directory. The destination prompt
-   also defaults to `Downloads`. Cancelling either prompt cancels the save
+   also defaults to `Downloads`. On Linux, honor `XDG_DOWNLOAD_DIR` when it is
+   readable and fall back to `~/Downloads` when it is absent or unavailable.
+   Cancelling either prompt cancels the save
    without creating an archive.
    Natural-language routing cannot execute the extension command; explicitly
    tell the user to enter the slash command at the Copilot prompt.
@@ -70,7 +72,8 @@ archive validation, and archive attachment.
    model configuration; clarify this when the user asks to preserve
    "configuration."
 3. Explain that Stash2D discovers external paths only from user messages and
-   user attachments. Model-generated tool arguments, assistant prose, tool
+   structured user attachments. Attachment provenance is not inferred from
+   path-shaped JSON in message text. Model-generated tool arguments, assistant prose, tool
    output, tracebacks, pasted code, shell transcripts, and quoted Stash2D
    directory-limit warnings are ignored. Host-injected skill context is also
    excluded. Mentioned directories are traversed only when the surrounding
@@ -101,10 +104,12 @@ archive validation, and archive attachment.
    If the path is unknown, `/stash2d-apply` opens the archive-folder prompt
    when interactive elicitation is available. Cancelling that prompt attaches
    nothing.
-2. Explain that apply validates the directory and metadata before attaching
-   archive files to the new session. If optional files exceed the attachment
-   budget, Stash2D keeps the core files selected and opens a multi-select
-   chooser for the optional content.
+2. Explain that apply validates the directory and metadata, copies the archive
+   into a private temporary snapshot, validates the snapshot again, and
+   attaches only snapshot files to the new session. If optional files exceed
+   the attachment budget, Stash2D keeps the core files selected and opens a
+   multi-select chooser for optional content. Directory groups that cannot fit
+   as a whole are split into individually selectable files.
 3. Explain that apply uses a safety prompt instructing Copilot to treat archived
    text as untrusted historical data, summarize recovered state, and wait for
    the user's current instruction. This is prompt-based protection, not a
@@ -173,8 +178,9 @@ EVAL-INTENT: /stash2d-save -> prompted directory | export the current public Cop
 - **External path inaccessible:** explain that optional path was skipped. Do
   not turn an unavailable external file into a fatal save error.
 - **Referenced directory exceeds discovery limits:** explain that directories
-  above 200 files or 50 directories are skipped to prevent an unbounded
-  walk. Recommend referencing a smaller subdirectory or specific files.
+  above 200 eligible files, 50 directories, or 1,000 inspected entries are
+  skipped to prevent an unbounded walk. Recommend referencing a smaller
+  subdirectory or specific files.
 - **Generation or attachment failure:** report the original error. Save removes
   its incomplete archive when possible. There are no automatic retries.
 - **Handoff generation exceeds attachment limits:** Save preserves every local
@@ -182,8 +188,9 @@ EVAL-INTENT: /stash2d-save -> prompted directory | export the current public Cop
   optional files omitted from model attachments.
 - **Apply exceeds attachment limits:** Stash2D keeps the core handoff,
   transcript, and metadata selected and opens a native multi-select chooser for
-  optional content. Without interactive selection, it attaches only the core
-  files.
+  optional content. Directory groups that cannot fit as a whole are split into
+  individually selectable files. Without interactive selection, it attaches
+  only the core files.
 - **Core files exceed attachment limits:** report the error and recommend
   reducing the oversized transcript, handoff, or metadata file.
 

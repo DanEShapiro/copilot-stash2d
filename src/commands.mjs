@@ -1,12 +1,26 @@
-import { mkdir, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
   ARCHIVE_FORMAT_VERSION,
+  copyArchiveSnapshotFiles,
   createArchiveDirectory,
+  inspectArchive,
   listFilesRecursively,
+  MAX_ARCHIVE_BYTES,
+  MAX_ARCHIVE_ENTRIES,
   pathExists,
   removeIncompleteArchive,
   validateArchive,
@@ -23,15 +37,19 @@ import {
 } from "./context-files.mjs";
 import { APPLY_PROMPT, HANDOFF_PROMPT, PLAN_PROMPT } from "./prompts.mjs";
 import {
-  renderExternalReferenceMarkdown,
+  renderExternalReferences,
   renderSessionMarkdown,
 } from "./session-export.mjs";
 import { copySessionArtifacts } from "./session-files.mjs";
 import { PLUGIN_VERSION } from "./version.mjs";
+import {
+  assertNoLinkedPathComponents,
+} from "./secure-files.mjs";
 
 const execFileAsync = promisify(execFile);
 const MAX_ATTACHMENT_FILES = 100;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+const MAX_CHOOSER_ITEMS = 1000;
 
 async function requireDirectory(directoryPath) {
   let info;
@@ -122,11 +140,8 @@ export async function userDownloadsDirectory({
     return path.isAbsolute(expanded)
       ? path.normalize(expanded)
       : path.resolve(homeDirectory, expanded);
-  } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
-      return fallback;
-    }
-    throw error;
+  } catch {
+    return fallback;
   }
 }
 
@@ -320,6 +335,11 @@ async function chooseFiles(
   if (candidates.length === 0) {
     return { approved: [], cancelled: false };
   }
+  if (candidates.length > MAX_CHOOSER_ITEMS) {
+    throw new Error(
+      `The file chooser safety limit is ${MAX_CHOOSER_ITEMS} items; ${candidates.length} items were offered.`,
+    );
+  }
   if (!session.capabilities?.ui?.elicitation) {
     await session.log(
       `Found ${candidates.length} ${description} file(s), but interactive confirmation is unavailable. No optional files were included.`,
@@ -348,7 +368,7 @@ async function chooseFiles(
                     : `${fileCount} files, ${candidate.byteSize} bytes`;
                 return {
                   const: String(index),
-                  title: `${candidate.resolvedPath} (${size})`,
+                  title: `${candidate.label} (${size})`,
                 };
               }),
             },
@@ -383,74 +403,142 @@ async function chooseFiles(
   }
 }
 
-function attachmentIfPresent(archivePath, relativePath) {
-  return pathExists(path.join(archivePath, relativePath)).then((exists) =>
-    exists
-      ? {
-          type: "file",
-          path: path.join(archivePath, relativePath),
-          displayName: relativePath,
+async function withApplySnapshot(
+  archivePath,
+  sourceAttachments,
+  callback,
+  { onCleanupError = async () => {} } = {},
+) {
+  let snapshotRoot;
+  try {
+    snapshotRoot = await mkdtemp(
+      path.join(os.tmpdir(), "copilot-stash2d-apply-"),
+    );
+    await chmod(snapshotRoot, 0o700);
+    const snapshotPath = path.join(snapshotRoot, "archive");
+    await copyArchiveSnapshotFiles(
+      archivePath,
+      snapshotPath,
+      sourceAttachments,
+    );
+    await validateArchive(snapshotPath);
+    const snapshotAttachments = sourceAttachments.map((attachment) => ({
+      type: "file",
+      path: path.join(
+        snapshotPath,
+        ...attachment.displayName.split("/"),
+      ),
+      displayName: attachment.displayName,
+    }));
+    return await callback(snapshotAttachments);
+  } finally {
+    if (snapshotRoot) {
+      try {
+        await rm(snapshotRoot, { recursive: true, force: true });
+      } catch (cleanupError) {
+        try {
+          await onCleanupError(cleanupError);
+        } catch {
+          // Cleanup reporting must not mask a successful send or primary error.
         }
-      : undefined,
-  );
-}
-
-async function collectArchiveAttachmentGroups(archivePath) {
-  const coreAttachments = (
-    await Promise.all([
-      attachmentIfPresent(archivePath, "Handoff.md"),
-      attachmentIfPresent(archivePath, "Session.md"),
-      attachmentIfPresent(archivePath, "Metadata.json"),
-    ])
-  ).filter(Boolean);
-  const optionalCandidates = [];
-  for (const relativeRoot of ["SessionState", "SessionFiles", "Context"]) {
-    const rootPath = path.join(archivePath, relativeRoot);
-    let entries;
-    try {
-      entries = await readdir(rootPath, { withFileTypes: true });
-    } catch (error) {
-      if (error?.code === "ENOENT") {
-        continue;
       }
-      throw error;
-    }
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      const entryPath = path.join(rootPath, entry.name);
-      const files = entry.isDirectory()
-        ? await listFilesRecursively(entryPath)
-        : [entryPath];
-      const attachments = files.map((filePath) => ({
-        type: "file",
-        path: filePath,
-        displayName: path
-          .relative(archivePath, filePath)
-          .split(path.sep)
-          .join("/"),
-      }));
-      let byteSize = 0;
-      for (const attachment of attachments) {
-        byteSize += (await stat(attachment.path)).size;
-      }
-      optionalCandidates.push({
-        resolvedPath: path
-          .relative(archivePath, entryPath)
-          .split(path.sep)
-          .join("/"),
-        fileCount: attachments.length,
-        byteSize,
-        attachments,
-      });
     }
   }
+}
+
+function sourceAttachment(entry) {
+  return {
+    type: "file",
+    path: entry.sourcePath,
+    displayName: entry.relativePath,
+    identity: entry.identity,
+  };
+}
+
+function collectArchiveAttachmentGroups(archiveEntries) {
+  const fileEntries = archiveEntries.filter((entry) => entry.type === "file");
+  const coreNames = new Set(["Handoff.md", "Session.md", "Metadata.json"]);
+  const coreAttachments = fileEntries
+    .filter((entry) => coreNames.has(entry.relativePath))
+    .sort(
+      (left, right) =>
+        ["Handoff.md", "Session.md", "Metadata.json"].indexOf(
+          left.relativePath,
+        ) -
+        ["Handoff.md", "Session.md", "Metadata.json"].indexOf(
+          right.relativePath,
+        ),
+    )
+    .map(sourceAttachment);
+  const groups = new Map();
+  for (const entry of fileEntries) {
+    if (coreNames.has(entry.relativePath)) {
+      continue;
+    }
+    const segments = entry.relativePath.split("/");
+    if (
+      !["SessionState", "SessionFiles", "Context"].includes(segments[0])
+    ) {
+      continue;
+    }
+    const label = segments.slice(0, Math.min(2, segments.length)).join("/");
+    const attachments = groups.get(label) ?? [];
+    attachments.push(sourceAttachment(entry));
+    groups.set(label, attachments);
+  }
+  const optionalCandidates = [...groups.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([label, attachments]) => ({
+      label,
+      fileCount: attachments.length,
+      byteSize: attachments.reduce(
+        (total, attachment) =>
+          total + attachment.identity.byteSize,
+        0,
+      ),
+      payload: attachments.sort((left, right) =>
+        left.displayName.localeCompare(right.displayName),
+      ),
+    }));
   return {
     core: coreAttachments,
     optional: optionalCandidates.flatMap(
-      (candidate) => candidate.attachments,
+      (candidate) => candidate.payload,
     ),
     optionalCandidates,
   };
+}
+
+async function splitOversizedCandidates(candidates, maxFiles, maxBytes) {
+  const selectable = [];
+  for (const candidate of candidates) {
+    if (selectable.length >= MAX_CHOOSER_ITEMS) {
+      throw new Error(
+        `Archive has more than ${MAX_CHOOSER_ITEMS} selectable optional items. Reduce or regroup the archive before applying it.`,
+      );
+    }
+    if (
+      candidate.fileCount <= maxFiles &&
+      candidate.byteSize <= maxBytes
+    ) {
+      selectable.push(candidate);
+      continue;
+    }
+    for (const attachment of candidate.payload) {
+      if (selectable.length >= MAX_CHOOSER_ITEMS) {
+        throw new Error(
+          `Archive has more than ${MAX_CHOOSER_ITEMS} individually selectable optional files. Reduce or regroup the archive before applying it.`,
+        );
+      }
+      selectable.push({
+        label: attachment.displayName,
+        fileCount: 1,
+        byteSize: attachment.identity.byteSize,
+        payload: [attachment],
+      });
+    }
+  }
+  return selectable;
 }
 
 export function createCommands({
@@ -459,6 +547,7 @@ export function createCommands({
   homeDirectory = os.homedir(),
   now = () => new Date(),
   cleanupArchive = removeIncompleteArchive,
+  resolveDownloadsDirectory = userDownloadsDirectory,
 } = {}) {
   if (!session) {
     throw new Error("A Copilot session is required.");
@@ -477,9 +566,6 @@ export function createCommands({
       saveInProgress = true;
       try {
         let { outputDirectory, title } = parseSaveArguments(rawArguments);
-        const defaultOutputDirectory = await userDownloadsDirectory({
-          homeDirectory,
-        });
         await session.log(
           "Copilot Stash2D save started. Wait for a saved-path confirmation or error before sending another message or running /stash2d-save again.",
           { level: "info" },
@@ -509,6 +595,9 @@ export function createCommands({
           title = promptedTitle || "session";
         }
         if (!outputDirectory) {
+          const defaultOutputDirectory = await resolveDownloadsDirectory({
+            homeDirectory,
+          });
           const promptedOutput = await inputIfAvailable(
             session,
             "Where should the Copilot Stash2D archive folder be created?",
@@ -532,25 +621,46 @@ export function createCommands({
         );
 
         const transcript = renderSessionMarkdown(snapshot.events);
-        const externalReferences = renderExternalReferenceMarkdown(
+        const externalReferences = renderExternalReferences(
           snapshot.events,
         );
         const candidates = await discoverExternalContextFiles(
-          externalReferences,
+          externalReferences.messageMarkdown,
           undefined,
           {
+            attachmentReferences:
+              externalReferences.attachmentReferences,
             baseDirectory: activeCwd,
             excludedRoots: [session.workspacePath],
             onWarning: (message) =>
               session.log(message, { level: "warning" }),
           },
         );
-        const contextReview = await chooseFiles(session, candidates);
+        const contextReview = await chooseFiles(
+          session,
+          candidates.map((candidate) => ({
+            label: candidate.resolvedPath,
+            fileCount: candidate.fileCount,
+            byteSize: candidate.byteSize,
+            payload: candidate,
+          })),
+        );
         if (contextReview.cancelled) {
           await session.log("Copilot Stash2D save cancelled. No archive was created.", {
             level: "info",
           });
           return;
+        }
+        const approvedContextUsage = candidateUsage(
+          contextReview.approved,
+        );
+        if (
+          approvedContextUsage.files > MAX_ARCHIVE_ENTRIES ||
+          approvedContextUsage.bytes > MAX_ARCHIVE_BYTES
+        ) {
+          throw new Error(
+            `Approved external context exceeds the archive safety limits of ${MAX_ARCHIVE_ENTRIES} files or ${MAX_ARCHIVE_BYTES} bytes.`,
+          );
         }
         await session.log(
           "Copilot Stash2D is creating the archive files.",
@@ -581,7 +691,7 @@ export function createCommands({
             );
           }
           const externalContext = await copyExternalContextFiles(
-            contextReview.approved,
+            contextReview.approved.map((item) => item.payload),
             archivePath,
             {
               onWarning: (message) =>
@@ -665,6 +775,7 @@ export function createCommands({
             sessionArtifacts: sessionArtifacts.entries,
             externalContext,
           });
+          await validateArchive(archivePath);
         } catch (error) {
           try {
             await cleanupArchive(archivePath);
@@ -725,9 +836,9 @@ export function createCommands({
         { level: "info" },
       );
       await requireDirectory(archivePath);
-      await validateArchive(archivePath);
-
-      const groups = await collectArchiveAttachmentGroups(archivePath);
+      await assertNoLinkedPathComponents(archivePath);
+      const inspection = await inspectArchive(archivePath);
+      const groups = collectArchiveAttachmentGroups(inspection.entries);
       await assertAttachmentBudget(groups.core, "Archive apply core");
       const coreUsage = await attachmentBudget(groups.core);
       let optionalAttachments = groups.optional;
@@ -737,10 +848,17 @@ export function createCommands({
         "Archive apply core",
       );
       if (bounded.omitted.length > 0) {
-        const review = await chooseFiles(session, groups.optionalCandidates, {
+        const maxFiles = MAX_ATTACHMENT_FILES - coreUsage.files;
+        const maxBytes = MAX_ATTACHMENT_BYTES - coreUsage.bytes;
+        const selectableCandidates = await splitOversizedCandidates(
+          groups.optionalCandidates,
+          maxFiles,
+          maxBytes,
+        );
+        const review = await chooseFiles(session, selectableCandidates, {
           description: "optional archive",
-          maxFiles: MAX_ATTACHMENT_FILES - coreUsage.files,
-          maxBytes: MAX_ATTACHMENT_BYTES - coreUsage.bytes,
+          maxFiles,
+          maxBytes,
         });
         if (review.cancelled) {
           await session.log(
@@ -750,26 +868,39 @@ export function createCommands({
           return;
         }
         optionalAttachments = review.approved.flatMap(
-          (candidate) => candidate.attachments,
+          (candidate) => candidate.payload,
         );
       }
-      const attachments = [...groups.core, ...optionalAttachments];
-      await assertAttachmentBudget(attachments, "Archive apply");
-      try {
-        await session.log(
-          `Copilot Stash2D is attaching ${attachments.length} archive file(s).`,
-          { level: "info" },
-        );
-        await session.send({
-          prompt: APPLY_PROMPT,
-          displayPrompt: `Apply Copilot Stash2D archive: ${archivePath}`,
-          attachments,
-        });
-      } catch (error) {
-        throw new Error(
-          `The public Copilot extension attachment API could not apply this archive. Check the Copilot CLI and plugin versions. ${error.message}`,
-        );
-      }
+      const sourceAttachments = [...groups.core, ...optionalAttachments];
+      await assertAttachmentBudget(sourceAttachments, "Archive apply");
+      await withApplySnapshot(
+        archivePath,
+        sourceAttachments,
+        async (attachments) => {
+        try {
+          await session.log(
+            `Copilot Stash2D is attaching ${attachments.length} archive file(s).`,
+            { level: "info" },
+          );
+          await session.send({
+            prompt: APPLY_PROMPT,
+            displayPrompt: `Apply Copilot Stash2D archive: ${archivePath}`,
+            attachments,
+          });
+        } catch (error) {
+          throw new Error(
+            `The public Copilot extension attachment API could not apply this archive. Check the Copilot CLI and plugin versions. ${error.message}`,
+          );
+        }
+        },
+        {
+          onCleanupError: (error) =>
+            session.log(
+              `Copilot Stash2D could not remove its private apply snapshot. ${error.message}`,
+              { level: "warning" },
+            ),
+        },
+      );
     },
   };
 }

@@ -25,6 +25,8 @@ Stash2D asks for a name and destination when interactive input is available,
 then exports the session through Copilot's public API. Without interactive
 input, omitted values default to the title `session` and the user's
 `Downloads` directory. The destination prompt also defaults to `Downloads`.
+On Linux, Stash2D honors `XDG_DOWNLOAD_DIR` when readable and falls back to
+`~/Downloads` when the configuration is absent or unavailable.
 Cancelling either interactive prompt cancels the save without creating an archive.
 `/share` is not required.
 
@@ -35,7 +37,9 @@ Values can also be supplied inline:
 ```
 
 Stash2D may offer to include external files or directories explicitly present
-in user messages or user attachments. Tool arguments are model-generated
+in user messages or supplied as structured user attachments. Attachment paths
+retain their original provenance instead of being inferred from message text.
+Tool arguments are model-generated
 implementation details and are not treated as archive intent. Paths that only
 appear in assistant prose, tool calls, tool output, tracebacks, pasted code, or
 shell transcripts are ignored. Host-injected skill context is also excluded.
@@ -61,7 +65,10 @@ Run this in a new session. Stash2D attaches the archive and instructs Copilot
 to reconstruct the prior working state, treat archived content as untrusted,
 and wait for your current instruction. These protections are prompt-based, not
 a runtime sandbox or tool lock. Cancelling the archive-folder prompt attaches
-nothing.
+nothing. Apply validates the archive, copies it into a private temporary
+snapshot, validates that snapshot again, and attaches files only from the
+snapshot so later changes to the original archive cannot alter the approved
+content.
 
 ## End-to-end example
 
@@ -209,10 +216,10 @@ and stop if the same error repeats:
 | Public session event API fails | No archive is created. Update or restart Copilot CLI, reload the plugin, and retry once. |
 | `session.workspacePath` is unavailable | Save continues from the public transcript, omits unavailable session artifacts, and warns the user. |
 | Referenced external file is missing or inaccessible | The optional file is skipped with an aggregated warning; save continues. |
-| Referenced directory exceeds 200 files or 50 directories | The directory candidate is skipped with a warning so discovery cannot block the save indefinitely. Reference a smaller subdirectory or specific files. |
+| Referenced directory exceeds 200 files, 50 directories, or 1,000 inspected entries | The directory candidate is skipped with a warning so discovery cannot block the save indefinitely. Reference a smaller subdirectory or specific files. |
 | Plan/handoff generation fails or times out | Save fails and removes the incomplete archive when possible. Resolve the API/model issue before retrying. |
 | Handoff generation has more than 100 files or 50 MiB available | Save preserves every local file, generates the handoff from a bounded subset, and reports how many optional files were omitted from model attachments. |
-| Apply has more than 100 files or 50 MiB available | Stash2D keeps the core files selected and opens a multi-select chooser for optional files and directory contents. If interactive selection is unavailable, only the core files are attached. |
+| Apply has more than 100 files or 50 MiB available | Stash2D keeps the core files selected and opens a multi-select chooser for optional files. Directory groups that cannot fit as a whole are split into individually selectable files. If interactive selection is unavailable, only the core files are attached. |
 | Core transcript, handoff, or metadata alone exceeds attachment limits | Apply stops before sending anything. Reduce the oversized core file and retry. |
 
 ## Safety
@@ -222,8 +229,9 @@ and stop if the same error repeats:
 - Stash2D does not scan or redact any exported source, including the transcript,
   tool output, plan, session artifacts, or approved external context. Treat the
   generated archive as sensitive and redact it before storing or sharing it.
-- Stash2D discovers external paths only from user messages and user
-  attachments. It does not turn model-generated tool arguments, tool output,
+- Stash2D discovers external paths only from user messages and structured user
+  attachments. It does not grant attachment provenance to path-shaped JSON in
+  message text or turn model-generated tool arguments, tool output,
   tracebacks, assistant prose, or quoted Stash2D directory-limit warnings into
   candidates.
 - Stash2D displays every candidate in one native multi-select list. Explicitly
@@ -254,15 +262,18 @@ and stop if the same error repeats:
   limits apply to each model attachment operation, not to files preserved on
   disk. Handoff generation automatically uses a bounded subset while retaining
   every file in the archive. Apply opens a multi-select chooser when the
-  complete archive exceeds the attachment budget.
+  complete archive exceeds the attachment budget and splits oversized optional
+  directory groups into individually selectable files.
 - Stash2D does not automatically chunk one archive across multiple model
   messages, and model-specific context limits may be lower.
-- External-directory discovery is bounded at 200 files or 50
-  directories per referenced directory. Git trees, nested repositories,
-  symlinks, and excluded roots are pruned before copying.
+- External-directory discovery is bounded at 200 eligible files, 50
+  directories, or 1,000 inspected entries per referenced directory. Git trees,
+  nested repositories, symlinks, and excluded roots are pruned before copying.
 - `Metadata.json` is limited separately to 1 MiB before it is parsed.
 - Archives must use `Metadata.json` format version `1`. Archive and session
   artifact symlinks are rejected.
+- Apply attaches only from a private, revalidated temporary snapshot of the
+  archive to prevent post-validation changes to the source directory.
 - The extension API may differ between Copilot CLI versions.
 - Save/apply use local files and do not upload archives to a Stash2D service.
   Transcript and archive attachments are sent to Copilot/model services during

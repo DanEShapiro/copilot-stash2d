@@ -71,7 +71,7 @@ test("rejects symlinks in edited archives before apply", async (t) => {
 
   await assert.rejects(
     validateArchive(archive),
-    /Archive symlinks are not supported/,
+    /Archive symlinks are not supported|Linked path components are not supported/,
   );
 });
 
@@ -112,5 +112,24 @@ test("rejects a file passed as the copyTree root", async (t) => {
   await assert.rejects(
     copyTree(source, path.join(directory, "destination")),
     /root must be a directory/,
+  );
+});
+
+test("bounds archive entry count and nesting depth", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const archive = path.join(directory, "archive");
+  await writeText(path.join(archive, "Session.md"), "session");
+  await writeText(path.join(archive, "Handoff.md"), "handoff");
+  await writeMetadata(archive, { formatVersion: ARCHIVE_FORMAT_VERSION });
+  await writeText(path.join(archive, "Context", "one.txt"), "one");
+  await writeText(path.join(archive, "Context", "nested", "two.txt"), "two");
+
+  await assert.rejects(
+    validateArchive(archive, { maxEntries: 4 }),
+    /safety limit of 4 entries/,
+  );
+  await assert.rejects(
+    validateArchive(archive, { maxDepth: 1 }),
+    /safety depth limit of 1/,
   );
 });

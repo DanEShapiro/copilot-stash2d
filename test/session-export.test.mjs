@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  renderExternalReferenceMarkdown,
+  renderExternalReferences,
   renderSessionMarkdown,
 } from "../src/session-export.mjs";
+
+function renderUserReferenceMarkdown(events) {
+  return renderExternalReferences(events).messageMarkdown;
+}
 
 test("renders main-session activity and omits subagent internals", () => {
   const events = [
@@ -73,7 +77,7 @@ test("renders main-session activity and omits subagent internals", () => {
 });
 
 test("external reference discovery uses only user-authored content", () => {
-  const markdown = renderExternalReferenceMarkdown([
+  const markdown = renderUserReferenceMarkdown([
     {
       type: "user.message",
       data: { content: "Keep `/tmp/user.txt`." },
@@ -102,16 +106,16 @@ test("external reference discovery uses only user-authored content", () => {
 });
 
 test("external reference discovery ignores quoted Stash2D directory warnings", () => {
-  const markdown = renderExternalReferenceMarkdown([
+  const markdown = renderUserReferenceMarkdown([
     {
       type: "user.message",
       data: {
         content: [
           "This appeared during my last save:",
           "",
-          "Referenced directory C:\\Windows\\assembly exceeds the discovery safety limit of 200 files or 50 directories and was skipped.",
+          "Referenced directory C:\\Windows\\assembly exceeds the discovery safety limit of 200 files, 50 directories, or 1000 inspected entries and was skipped.",
           "",
-          "> Referenced directory Q:\\spocore exceeds the discovery safety limit of 200 files or 50 directories and was skipped.",
+          "> Referenced directory Q:\\spocore exceeds the discovery safety limit of 200 files, 50 directories, or 1000 inspected entries and was skipped.",
           "",
           "Keep `C:\\Users\\me\\notes.txt`.",
         ].join("\n"),
@@ -125,7 +129,7 @@ test("external reference discovery ignores quoted Stash2D directory warnings", (
 });
 
 test("external reference discovery ignores pasted code and shell transcripts", () => {
-  const markdown = renderExternalReferenceMarkdown([
+  const markdown = renderUserReferenceMarkdown([
     {
       type: "user.message",
       data: {
@@ -148,7 +152,7 @@ test("external reference discovery ignores pasted code and shell transcripts", (
 });
 
 test("external reference discovery ignores host skill context and command results", () => {
-  const markdown = renderExternalReferenceMarkdown([
+  const markdown = renderUserReferenceMarkdown([
     {
       type: "user.message",
       data: {
@@ -169,14 +173,17 @@ test("external reference discovery ignores host skill context and command result
 });
 
 test("external reference discovery ignores shell prompts and stack frames", () => {
-  const markdown = renderExternalReferenceMarkdown([
+  const markdown = renderUserReferenceMarkdown([
     {
       type: "user.message",
       data: {
         content: [
           "PS C:\\src\\app> Get-Content C:\\Users\\me\\.ssh\\config",
+          "> PS C:\\src\\app> Get-Content C:\\Users\\me\\.ssh\\id_rsa",
           "C:\\src\\app> type C:\\secrets.txt",
           "$ cat /etc/shadow",
+          "# cat /root/token",
+          "# python /home/me/token.py",
           "alice@host:/work$ cat /home/alice/token.txt",
           '  File "/home/me/app/creds.py", line 8, in load',
           "    at Object.<anonymous> (C:\\src\\app\\index.js:12:9)",
@@ -187,10 +194,101 @@ test("external reference discovery ignores shell prompts and stack frames", () =
   ]);
 
   assert.doesNotMatch(markdown, /\.ssh\\config/);
+  assert.doesNotMatch(markdown, /id_rsa/);
   assert.doesNotMatch(markdown, /secrets\.txt/);
   assert.doesNotMatch(markdown, /etc\/shadow/);
+  assert.doesNotMatch(markdown, /root\/token/);
+  assert.doesNotMatch(markdown, /token\.py/);
   assert.doesNotMatch(markdown, /token\.txt/);
   assert.doesNotMatch(markdown, /creds\.py/);
   assert.doesNotMatch(markdown, /index\.js/);
+  assert.match(markdown, /notes\.txt/);
+});
+
+test("external references preserve structured attachment paths", () => {
+  const uncPath = "\\\\server\\share\\folder";
+  const references = renderExternalReferences([
+    {
+      type: "user.message",
+      data: {
+        content: '{"path":"C:\\\\not-an-attachment"}',
+        attachments: [{ type: "file", path: uncPath }],
+      },
+    },
+  ]);
+
+  assert.deepEqual(references.attachmentReferences, [
+    { path: uncPath, source: "attachment" },
+  ]);
+  assert.match(references.messageMarkdown, /not-an-attachment/);
+  assert.doesNotMatch(references.messageMarkdown, /server/);
+});
+
+test("external reference discovery ignores tilde and unclosed fences", () => {
+  const markdown = renderUserReferenceMarkdown([
+    {
+      type: "user.message",
+      data: {
+        content: [
+          "~~~~powershell",
+          "Get-Content C:\\secrets.txt",
+          "~~~~",
+          "> ~~~sh",
+          "> cat /tmp/blockquoted-secret.txt",
+          "> ~~~",
+          "~~~not-a-close",
+          "cat /tmp/still-hidden.txt",
+          "~~~",
+          "```sh",
+          "cat /etc/shadow",
+          "Please keep /tmp/also-hidden.txt",
+        ].join("\n"),
+      },
+    },
+  ]);
+
+  assert.doesNotMatch(markdown, /secrets\.txt/);
+  assert.doesNotMatch(markdown, /blockquoted-secret/);
+  assert.doesNotMatch(markdown, /etc\/shadow/);
+  assert.doesNotMatch(markdown, /also-hidden/);
+  assert.doesNotMatch(markdown, /still-hidden/);
+});
+
+test("blockquoted fences cannot close root-level fences", () => {
+  const markdown = renderUserReferenceMarkdown([
+    {
+      type: "user.message",
+      data: {
+        content: [
+          "````text",
+          "hidden /tmp/one.txt",
+          "> ````",
+          "still hidden /tmp/two.txt",
+          "````",
+          "Keep `/tmp/visible.txt`.",
+        ].join("\n"),
+      },
+    },
+  ]);
+
+  assert.doesNotMatch(markdown, /one\.txt/);
+  assert.doesNotMatch(markdown, /two\.txt/);
+  assert.match(markdown, /visible\.txt/);
+});
+
+test("external reference discovery ignores cross-platform PowerShell prompts", () => {
+  const markdown = renderUserReferenceMarkdown([
+    {
+      type: "user.message",
+      data: {
+        content: [
+          "PS /home/me> Get-Content /etc/shadow",
+          "Please keep `/tmp/notes.txt`.",
+        ].join("\n"),
+      },
+    },
+  ]);
+
+  assert.doesNotMatch(markdown, /etc\/shadow/);
   assert.match(markdown, /notes\.txt/);
 });

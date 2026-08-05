@@ -28,46 +28,92 @@ function attachmentSummary(attachments) {
   return `\n\n### Attachments\n\n${json(attachments)}`;
 }
 
+function stripFencedBlocks(content) {
+  const output = [];
+  let fence;
+  for (const line of content.split(/\r?\n/)) {
+    const prefix = line.match(/^\s*(?:>\s*)*/)?.[0] ?? "";
+    const quoteDepth = (prefix.match(/>/g) ?? []).length;
+    const fenceLine = line.slice(prefix.length);
+    if (!fence) {
+      const match = fenceLine.match(/^\s*(`{3,}|~{3,})/);
+      if (match) {
+        fence = {
+          character: match[1][0],
+          length: match[1].length,
+          quoteDepth,
+        };
+      } else {
+        output.push(line);
+      }
+      continue;
+    }
+    const closingMatch = fenceLine.match(/^\s*(`{3,}|~{3,})\s*$/);
+    if (
+      closingMatch &&
+      quoteDepth === fence.quoteDepth &&
+      closingMatch[1][0] === fence.character &&
+      closingMatch[1].length >= fence.length
+    ) {
+      fence = undefined;
+    }
+  }
+  return output.join("\n");
+}
+
 function sanitizeUserReferenceContent(content) {
-  return content
-    .replace(/<skill-context\b[^>]*>[\s\S]*?<\/skill-context>/gi, "")
-    .replace(/```[\s\S]*?```/g, "")
+  return stripFencedBlocks(
+    content.replace(/<skill-context\b[^>]*>[\s\S]*?<\/skill-context>/gi, ""),
+  )
     .split(/\r?\n/)
-    .filter(
-      (line) =>
-        !/^(?:\s*>{1,2}\s*)?\$[\w:.-]+\s*=/.test(line) &&
-        !/^\s*(?:PS\s+[A-Za-z]:\\[^>]*>|[A-Za-z]:\\[^>]*>|\$\s+|[^\s@]+@[^\s:]+:[^$#]*[$#]\s+)/.test(
-          line,
+    .filter((line) => {
+      const normalized = line.replace(/^\s*(?:>\s*)+/, "");
+      return (
+        !/^\s*\$[\w:.-]+\s*=/.test(normalized) &&
+        !/^\s*(?:PS\s+\S[^>]*>|[A-Za-z]:\\[^>]*>|\$\s+|[^\s@]+@[^\s:]+:[^$#]*[$#]\s+)/.test(
+          normalized,
         ) &&
-        !/^\s*File\s+["'][^"']+["'],\s+line\s+\d+/i.test(line) &&
-        !/^\s*at\s+(?:.+?\s+\()?[^()\s]+:\d+:\d+\)?\s*$/.test(line) &&
+        !/^\s*#\s+\S/.test(normalized) &&
+        !/^\s*File\s+["'][^"']+["'],\s+line\s+\d+/i.test(normalized) &&
+        !/^\s*at\s+(?:.+?\s+\()?[^()\s]+:\d+:\d+\)?\s*$/.test(
+          normalized,
+        ) &&
         !/^\s*\S.*?\s+=>\s+(?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\)/.test(
-          line,
+          normalized,
         ) &&
-        !/^\s*>{1,2}\s*(?:#|\[|(?:Add|Copy|Export|Find|Get|Import|Invoke|Move|New|Remove|Select|Set|Start|Stop|Test|Where)-[\w-]+)/i.test(
-          line,
+        !/^\s*(?:#|\[|(?:Add|Copy|Export|Find|Get|Import|Invoke|Move|New|Remove|Select|Set|Start|Stop|Test|Where)-[\w-]+)/i.test(
+          normalized,
         ) &&
-        !/^(?:>\s*)?Referenced directory .+ exceeds the discovery safety limit of \d+ files or \d+ directories and was skipped\.\s*$/.test(
-          line,
-        ),
-    )
+        !isDirectoryLimitWarning(normalized)
+      );
+    })
     .join("\n");
 }
 
-export function renderExternalReferenceMarkdown(events) {
+export function renderExternalReferences(events) {
   const sections = [];
+  const attachmentPaths = new Set();
   for (const event of events) {
     if (event.ephemeral || event.agentId) {
       continue;
     }
     const data = event.data ?? {};
     if (event.type === "user.message") {
-      sections.push(
-        `${sanitizeUserReferenceContent(data.content ?? "")}${attachmentSummary(data.attachments)}`,
-      );
+      sections.push(sanitizeUserReferenceContent(data.content ?? ""));
+      for (const attachment of data.attachments ?? []) {
+        if (typeof attachment?.path === "string" && attachment.path) {
+          attachmentPaths.add(attachment.path);
+        }
+      }
     }
   }
-  return sections.join("\n\n");
+  return {
+    messageMarkdown: sections.join("\n\n"),
+    attachmentReferences: [...attachmentPaths].map((attachmentPath) => ({
+      path: attachmentPath,
+      source: "attachment",
+    })),
+  };
 }
 
 export function renderSessionMarkdown(events) {
@@ -142,3 +188,4 @@ export function renderSessionMarkdown(events) {
 
   return `${sections.join("\n\n")}\n`;
 }
+import { isDirectoryLimitWarning } from "./messages.mjs";

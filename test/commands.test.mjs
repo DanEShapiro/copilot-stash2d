@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import {
@@ -64,6 +64,22 @@ test("falls back to the home Downloads directory on other platforms", async () =
     await userDownloadsDirectory({
       homeDirectory,
       platform: "darwin",
+    }),
+    path.join(homeDirectory, "Downloads"),
+  );
+});
+
+test("falls back when Linux XDG Downloads configuration is unreadable", async () => {
+  const homeDirectory = path.resolve("home", "example");
+
+  assert.equal(
+    await userDownloadsDirectory({
+      homeDirectory,
+      platform: "linux",
+      env: {},
+      readText: async () => {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      },
     }),
     path.join(homeDirectory, "Downloads"),
   );
@@ -724,6 +740,66 @@ test("reports public attachment API failures explicitly", async (t) => {
   );
 });
 
+test("uses an immutable private snapshot while applying an archive", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const archivePath = path.join(directory, "archive");
+  const handoffPath = path.join(archivePath, "Handoff.md");
+  await writeText(path.join(archivePath, "Session.md"), "session");
+  await writeText(handoffPath, "original handoff");
+  await writeMetadata(archivePath, { formatVersion: 1 });
+  let attachedHandoff;
+  let attachedPaths;
+  const session = fakeSession({
+    send: async (message) => {
+      await rm(handoffPath);
+      attachedPaths = message.attachments.map((attachment) => attachment.path);
+      const attachment = message.attachments.find(
+        (item) => item.displayName === "Handoff.md",
+      );
+      attachedHandoff = await readFile(attachment.path, "utf8");
+    },
+  });
+
+  const commands = createCommands({ session, cwd: directory });
+
+  await commands.apply(`"${archivePath}"`);
+
+  assert.equal(attachedHandoff, "original handoff");
+  assert.ok(
+    attachedPaths.every(
+      (attachmentPath) => !attachmentPath.startsWith(archivePath),
+    ),
+  );
+});
+
+test("rejects archive files changed after review but before snapshot", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const archivePath = path.join(directory, "archive");
+  const handoffPath = path.join(archivePath, "Handoff.md");
+  await writeText(path.join(archivePath, "Session.md"), "session");
+  await writeText(handoffPath, "original handoff");
+  await writeMetadata(archivePath, { formatVersion: 1 });
+  for (let index = 0; index < 98; index += 1) {
+    await writeText(
+      path.join(archivePath, "SessionFiles", `${index}.txt`),
+      "content",
+    );
+  }
+  const session = fakeSession({
+    elicitationHandler: async () => {
+      await writeText(handoffPath, "replacement handoff");
+      return { action: "accept", content: { files: [] } };
+    },
+  });
+  const commands = createCommands({ session, cwd: directory });
+
+  await assert.rejects(
+    commands.apply(`"${archivePath}"`),
+    /Source file changed while it was being copied/,
+  );
+  assert.equal(session.sent.length, 0);
+});
+
 test("lets users select a bounded subset when apply exceeds attachment limits", async (t) => {
   const directory = await temporaryDirectory(t);
   const archivePath = path.join(directory, "archive");
@@ -747,6 +823,47 @@ test("lets users select a bounded subset when apply exceeds attachment limits", 
   assert.deepEqual(
     session.sent[0].attachments.map((attachment) => attachment.displayName),
     ["Handoff.md", "Session.md", "Metadata.json", "SessionFiles/0.txt", "SessionFiles/1.txt"],
+  );
+});
+
+test("splits oversized apply directory groups into selectable files", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const archivePath = path.join(directory, "archive");
+  await writeText(path.join(archivePath, "Session.md"), "session");
+  await writeText(path.join(archivePath, "Handoff.md"), "handoff");
+  await writeMetadata(archivePath, { formatVersion: 1 });
+  for (let index = 0; index < 98; index += 1) {
+    await writeText(
+      path.join(
+        archivePath,
+        "SessionFiles",
+        "group",
+        `${String(index).padStart(3, "0")}.txt`,
+      ),
+      "content",
+    );
+  }
+  const session = fakeSession({
+    elicitations: [{ action: "accept", content: { files: ["0", "1"] } }],
+  });
+  const commands = createCommands({ session, cwd: directory });
+
+  await commands.apply(`"${archivePath}"`);
+
+  assert.deepEqual(
+    session.sent[0].attachments.map((attachment) => attachment.displayName),
+    [
+      "Handoff.md",
+      "Session.md",
+      "Metadata.json",
+      "SessionFiles/group/000.txt",
+      "SessionFiles/group/001.txt",
+    ],
+  );
+  assert.equal(
+    session.elicitationRequests[0].requestedSchema.properties.files.items
+      .anyOf.length,
+    98,
   );
 });
 
@@ -834,6 +951,31 @@ test("rejects archive output inside the session files tree", async (t) => {
   );
   assert.deepEqual(await readdir(outputDirectory), []);
   assert.equal(session.sent.length, 0);
+});
+
+test("does not resolve Downloads when an explicit output is supplied", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const session = fakeSession();
+  const commands = createCommands({
+    session,
+    cwd: directory,
+    now: () => new Date(FIXED_DATE),
+    resolveDownloadsDirectory: async () => {
+      throw new Error("XDG configuration unavailable");
+    },
+  });
+
+  await commands.save(`--output "${directory}" --title "explicit output"`);
+
+  assert.equal(
+    await pathExists(
+      path.join(
+        directory,
+        archiveFolderName("explicit output", FIXED_DATE),
+      ),
+    ),
+    true,
+  );
 });
 
 test("does not create a success-shaped archive when handoff generation fails", async (t) => {

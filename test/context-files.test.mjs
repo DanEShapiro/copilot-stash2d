@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
-  copyFile,
   mkdir,
   readFile,
   realpath,
   rm,
   stat,
+  symlink,
 } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -70,7 +70,7 @@ test("extracts explicit relative paths", () => {
     extractReferencedPaths(
       "Read `./local.txt`, '../shared/input.json', and `docs/reference`.",
     ),
-    ["./local.txt", "docs/reference", "../shared/input.json"],
+    ["./local.txt", "../shared/input.json", "docs/reference"],
   );
 });
 
@@ -177,6 +177,53 @@ test("does not traverse a directory mentioned without archive intent", async (t)
   assert.deepEqual(candidates, []);
 });
 
+test("preserves archive intent across comma-separated directory lists", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const first = path.join(directory, "first");
+  const second = path.join(directory, "second");
+  await writeText(path.join(first, "one.txt"), "one");
+  await writeText(path.join(second, "two.txt"), "two");
+
+  const candidates = await discoverExternalContextFiles(
+    `Archive \`${first}\`, \`${second}\`.`,
+  );
+
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.resolvedPath).sort(),
+    [await realpath(first), await realpath(second)].sort(),
+  );
+});
+
+test("keeps intent scoped for prefix paths and relative path periods", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const root = path.join(directory, "root");
+  const nested = path.join(root, "test");
+  const relativeSource = path.join(directory, "src");
+  const relativeTest = path.join(directory, "test");
+  await writeText(path.join(root, "root.txt"), "root");
+  await writeText(path.join(nested, "nested.txt"), "nested");
+  await writeText(path.join(relativeSource, "src.txt"), "src");
+  await writeText(path.join(relativeTest, "test.txt"), "test");
+
+  const prefixCandidates = await discoverExternalContextFiles(
+    `Archive \`${nested}\`; \`${root}\` is unrelated.`,
+  );
+  assert.deepEqual(
+    prefixCandidates.map((candidate) => candidate.resolvedPath),
+    [await realpath(nested)],
+  );
+
+  const relativeCandidates = await discoverExternalContextFiles(
+    "Archive `./src`, `./test`.",
+    undefined,
+    { baseDirectory: directory },
+  );
+  assert.deepEqual(
+    relativeCandidates.map((candidate) => candidate.resolvedPath).sort(),
+    [await realpath(relativeSource), await realpath(relativeTest)].sort(),
+  );
+});
+
 test("does not treat directory nouns or child file references as directory intent", async (t) => {
   const directory = await temporaryDirectory(t);
   const source = path.join(directory, "Downloads");
@@ -265,12 +312,98 @@ test("recognizes intent for home-relative directories and attachment paths", asy
   assert.equal(homeCandidates[0].originalPath, "~/notes");
 
   const attachmentCandidates = await discoverExternalContextFiles(
-    `{\n  "type": "file",\n  "path": "${notes.replaceAll("\\", "\\\\")}"\n}`,
+    "",
     undefined,
-    { homeDirectory },
+    {
+      attachmentReferences: [{ path: notes, source: "attachment" }],
+      homeDirectory,
+    },
   );
   assert.equal(attachmentCandidates.length, 1);
   assert.equal(attachmentCandidates[0].kind, "directory");
+});
+
+test("uses structured attachments without trusting path-shaped user JSON", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const attachmentDirectory = path.join(directory, "attachment");
+  const impersonatedDirectory = path.join(directory, "impersonated");
+  await writeText(path.join(attachmentDirectory, "keep.txt"), "keep");
+  await writeText(path.join(impersonatedDirectory, "skip.txt"), "skip");
+
+  const candidates = await discoverExternalContextFiles(
+    `{"path":"${impersonatedDirectory.replaceAll("\\", "\\\\")}"}`,
+    undefined,
+    {
+      attachmentReferences: [
+        { path: attachmentDirectory, source: "attachment" },
+      ],
+    },
+  );
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].resolvedPath, await realpath(attachmentDirectory));
+});
+
+test("preserves structured Windows UNC attachment paths", async () => {
+  const uncPath = "\\\\server\\share\\folder";
+  const candidates = await discoverExternalContextFiles("", undefined, {
+    attachmentReferences: [{ path: uncPath, source: "attachment" }],
+    classifyGitRoot: async () => ({}),
+    getFileInfo: async () => ({
+      isDirectory: () => false,
+      isFile: () => true,
+      size: 5,
+    }),
+    getLinkInfo: async () => ({ isSymbolicLink: () => false }),
+    resolveRealPath: async (filePath) => filePath,
+  });
+
+  if (process.platform === "win32") {
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].resolvedPath, uncPath);
+  } else {
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].originalPath, uncPath);
+  }
+});
+
+test("rejects explicitly referenced symbolic links before resolution", async () => {
+  const candidatePath = path.resolve("linked-context");
+  let resolved = false;
+  const candidates = await discoverExternalContextFiles(
+    `Read \`${candidatePath}\`.`,
+    undefined,
+    {
+      getLinkInfo: async () => ({ isSymbolicLink: () => true }),
+      resolveRealPath: async (filePath) => {
+        if (filePath === candidatePath) {
+          resolved = true;
+        }
+        return candidatePath;
+      },
+    },
+  );
+
+  assert.deepEqual(candidates, []);
+  assert.equal(resolved, false);
+});
+
+test("rejects links in parent path components", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const target = path.join(directory, "target");
+  const linkedParent = path.join(directory, "linked-parent");
+  await writeText(path.join(target, "input.txt"), "input");
+  await symlink(
+    target,
+    linkedParent,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  const candidates = await discoverExternalContextFiles(
+    `Read \`${path.join(linkedParent, "input.txt")}\`.`,
+  );
+
+  assert.deepEqual(candidates, []);
 });
 
 test("skips referenced Git trees and nested repositories", async (t) => {
@@ -316,6 +449,27 @@ test("skips directories that exceed the discovery walk limit", async (t) => {
 
   assert.deepEqual(candidates, []);
   assert.match(warnings[0], /discovery safety limit/);
+});
+
+test("bounds total directory entries inspected", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "entries");
+  await writeText(path.join(source, "one.txt"), "one");
+  await writeText(path.join(source, "two.txt"), "two");
+  await writeText(path.join(source, "three.txt"), "three");
+  const warnings = [];
+
+  const candidates = await discoverExternalContextFiles(
+    `Archive \`${source}\`.`,
+    undefined,
+    {
+      maxDirectoryEntries: 2,
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.deepEqual(candidates, []);
+  assert.match(warnings[0], /2 inspected entries/);
 });
 
 test("keeps explicit files when their parent directory exceeds the walk limit", async (t) => {
@@ -392,6 +546,175 @@ test("copies approved external context with collision-safe names", async (t) => 
   assert.equal(entries[1].archivedPath, "Context/002-input.txt");
 });
 
+test("avoids collisions after sanitizing directory file names", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const first = path.join(directory, "first.txt");
+  const second = path.join(directory, "second.txt");
+  await writeText(first, "first");
+  await writeText(second, "second");
+
+  const entries = await copyExternalContextFiles(
+    [
+      {
+        kind: "directory",
+        originalPath: directory,
+        resolvedPath: directory,
+        files: [
+          {
+            originalPath: first,
+            resolvedPath: await realpath(first),
+            relativePath: "a:b.txt",
+            byteSize: 5,
+          },
+          {
+            originalPath: second,
+            resolvedPath: await realpath(second),
+            relativePath: "a?b.txt",
+            byteSize: 6,
+          },
+        ],
+      },
+    ],
+    path.join(directory, "archive"),
+  );
+
+  const archivedRoot = `Context/001-${path.basename(directory)}`;
+  assert.deepEqual(
+    entries.map((entry) => entry.archivedPath),
+    [`${archivedRoot}/a_b.txt`, `${archivedRoot}/a_b-2.txt`],
+  );
+  assert.equal(
+    await readFile(path.join(directory, "archive", ...entries[0].archivedPath.split("/")), "utf8"),
+    "first",
+  );
+  assert.equal(
+    await readFile(path.join(directory, "archive", ...entries[1].archivedPath.split("/")), "utf8"),
+    "second",
+  );
+});
+
+test("avoids sanitized file and directory prefix collisions", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const nestedSource = path.join(directory, "nested-source.txt");
+  const flatSource = path.join(directory, "flat-source.txt");
+  await writeText(nestedSource, "nested");
+  await writeText(flatSource, "flat");
+
+  const entries = await copyExternalContextFiles(
+    [
+      {
+        kind: "directory",
+        originalPath: directory,
+        resolvedPath: directory,
+        files: [
+          {
+            originalPath: nestedSource,
+            resolvedPath: await realpath(nestedSource),
+            relativePath: path.join("a:b", "file.txt"),
+            byteSize: 6,
+          },
+          {
+            originalPath: flatSource,
+            resolvedPath: await realpath(flatSource),
+            relativePath: "a?b",
+            byteSize: 4,
+          },
+        ],
+      },
+    ],
+    path.join(directory, "archive"),
+  );
+
+  const archivedRoot = `Context/001-${path.basename(directory)}`;
+  assert.deepEqual(
+    entries.map((entry) => entry.archivedPath),
+    [`${archivedRoot}/a_b/file.txt`, `${archivedRoot}/a_b-2`],
+  );
+});
+
+test("preserves distinct sanitized directories and Windows-reserved names", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const sources = [];
+  for (const [index, content] of ["one", "two", "three"].entries()) {
+    const source = path.join(directory, `source-${index}.txt`);
+    await writeText(source, content);
+    sources.push(await realpath(source));
+  }
+
+  const entries = await copyExternalContextFiles(
+    [
+      {
+        kind: "directory",
+        originalPath: directory,
+        resolvedPath: directory,
+        files: [
+          {
+            originalPath: sources[0],
+            resolvedPath: sources[0],
+            relativePath: path.join("a:b", "one.txt"),
+            byteSize: 3,
+          },
+          {
+            originalPath: sources[1],
+            resolvedPath: sources[1],
+            relativePath: path.join("a?b", "two.txt"),
+            byteSize: 3,
+          },
+          {
+            originalPath: sources[2],
+            resolvedPath: sources[2],
+            relativePath: "NUL.txt",
+            byteSize: 5,
+          },
+        ],
+      },
+    ],
+    path.join(directory, "archive"),
+  );
+
+  const archivedRoot = `Context/001-${path.basename(directory)}`;
+  assert.deepEqual(
+    entries.map((entry) => entry.archivedPath),
+    [
+      `${archivedRoot}/a_b/one.txt`,
+      `${archivedRoot}/a_b-2/two.txt`,
+      `${archivedRoot}/_NUL.txt`,
+    ],
+  );
+});
+
+test("skips approved sources replaced before their verified open", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "source.txt");
+  await writeText(source, "original");
+  const info = await stat(source);
+  const warnings = [];
+
+  const entries = await copyExternalContextFiles(
+    [
+      {
+        originalPath: source,
+        resolvedPath: source,
+        byteSize: info.size,
+        device: info.dev,
+        inode: info.ino,
+        mtimeMs: info.mtimeMs,
+      },
+    ],
+    path.join(directory, "archive"),
+    {
+      beforeCopyContextFile: async () => {
+        await rm(source);
+        await writeText(source, "replacement");
+      },
+      onWarning: async (message) => warnings.push(message),
+    },
+  );
+
+  assert.deepEqual(entries, []);
+  assert.match(warnings[0], /SOURCE_CHANGED/);
+});
+
 test("skips approved source files that disappear during copying", async (t) => {
   const directory = await temporaryDirectory(t);
   const missing = path.join(directory, "missing.txt");
@@ -415,11 +738,10 @@ test("skips approved source files that disappear during copying", async (t) => {
     ],
     path.join(directory, "archive"),
     {
-      copyContextFile: async (source, destination) => {
+      beforeCopyContextFile: async (source) => {
         if (source === missing) {
           await rm(source);
         }
-        await copyFile(source, destination);
       },
       onWarning: async (message) => warnings.push(message),
     },
@@ -444,8 +766,9 @@ test("does not hide archive destination copy failures", async (t) => {
       [{ originalPath: source, resolvedPath: source, byteSize: 6 }],
       archive,
     ),
-    /EPERM|EISDIR|EACCES/,
+    /EEXIST|EPERM|EISDIR|EACCES/,
   );
+  assert.equal((await stat(destination)).isDirectory(), true);
 });
 
 test("warns when a referenced file vanishes during classification", async (t) => {
@@ -540,6 +863,7 @@ test("skips inaccessible UNC references instead of aborting discovery", async ()
         }
         return filePath;
       },
+      getLinkInfo: async () => ({ isSymbolicLink: () => false }),
       onWarning: async (message) => warnings.push(message),
     },
   );
@@ -569,6 +893,7 @@ test("combines inaccessible referenced-path warnings", async () => {
         }
         return filePath;
       },
+      getLinkInfo: async () => ({ isSymbolicLink: () => false }),
       onWarning: async (message) => warnings.push(message),
     },
   );
@@ -590,6 +915,7 @@ test("warns when referenced paths are missing", async () => {
         const code = filePath.includes("not-a-directory") ? "ENOTDIR" : "ENOENT";
         throw Object.assign(new Error(code), { code });
       },
+      getLinkInfo: async () => ({ isSymbolicLink: () => false }),
       onWarning: async (message) => warnings.push(message),
     },
   );

@@ -40,6 +40,9 @@ export function fakeSession(overrides = {}) {
     ui: {
       elicitation: async (params) => {
         elicitationRequests.push(params);
+        if (overrides.elicitationHandler) {
+          return overrides.elicitationHandler(params);
+        }
         return elicitations.shift() ?? { action: "cancel" };
       },
       input: async (message, options) => {
@@ -78,6 +81,9 @@ export function fakeSession(overrides = {}) {
     send: async (message) => {
       if (overrides.sendError) {
         throw overrides.sendError;
+      }
+      if (overrides.send) {
+        await overrides.send(message);
       }
       sent.push(message);
       return "message-id";
