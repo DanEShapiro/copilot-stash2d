@@ -23,6 +23,15 @@ test("extracts common absolute path forms", () => {
   );
 });
 
+test("does not convert URLs or slash-prefixed network paths into files", () => {
+  assert.deepEqual(
+    extractReferencedPaths(
+      "Open `https://example.com/page`, \"ssh://host/repo\", and `//server/share`.",
+    ),
+    [],
+  );
+});
+
 test("splits colon-joined paths and keeps line-number suffixes usable", () => {
   assert.deepEqual(
     extractReferencedPaths("Error in /src/a.ts:/src/b.ts today."),
@@ -191,6 +200,24 @@ test("skips directories that exceed the discovery walk limit", async (t) => {
 
   assert.deepEqual(candidates, []);
   assert.match(warnings[0], /discovery safety limit/);
+});
+
+test("keeps explicit files when their parent directory exceeds the walk limit", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "large");
+  const first = path.join(source, "one.txt");
+  await writeText(first, "one");
+  await writeText(path.join(source, "two.txt"), "two");
+
+  const candidates = await discoverExternalContextFiles(
+    `Read \`${source}\` and \`${first}\`.`,
+    undefined,
+    { maxDirectoryFiles: 1 },
+  );
+
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].kind, "file");
+  assert.equal(candidates[0].resolvedPath, await realpath(first));
 });
 
 test("excludes Copilot internals and the active session workspace", async (t) => {

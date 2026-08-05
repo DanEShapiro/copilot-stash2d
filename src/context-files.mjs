@@ -55,7 +55,7 @@ function cleanCandidate(value) {
 
 function splitFusedPaths(value) {
   const separators = [
-    ...value.matchAll(/:(?=(?:~[\\/]|\/|[A-Za-z]:[\\/]|\\\\))/g),
+    ...value.matchAll(/:(?=(?:~[\\/]|\/(?!\/)|[A-Za-z]:[\\/]|\\\\))/g),
   ].filter(
     (match) => !(match.index === 1 && /^[A-Za-z]$/.test(value[0])),
   );
@@ -90,8 +90,14 @@ export function extractReferencedPaths(markdown) {
   ];
   for (const pattern of patterns) {
     for (const match of markdown.matchAll(pattern.expression)) {
+      if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(match[1])) {
+        continue;
+      }
       for (const fragment of splitFusedPaths(match[1])) {
         const candidate = cleanCandidate(fragment);
+        if (candidate.startsWith("//")) {
+          continue;
+        }
         if (
           pattern.bare &&
           candidate.startsWith("/") &&
@@ -210,15 +216,19 @@ export async function discoverExternalContextFiles(
     resolvedPath,
     originalPath,
     relativePath = path.basename(resolvedPath),
-    { skipGitClassification = false } = {},
+    { skipGitClassification = false, pendingSeen } = {},
   ) {
-    if (resolvedPath === sourceRealPath || seen.has(resolvedPath)) {
+    if (
+      resolvedPath === sourceRealPath ||
+      seen.has(resolvedPath) ||
+      pendingSeen?.has(resolvedPath)
+    ) {
       return undefined;
     }
     if (ignoredRoots.some((root) => isWithinRoot(resolvedPath, root))) {
       return undefined;
     }
-    seen.add(resolvedPath);
+    (pendingSeen ?? seen).add(resolvedPath);
     if (!skipGitClassification) {
       const classification = await gitClassificationFor(resolvedPath);
       if (classification.warning) {
@@ -251,6 +261,7 @@ export async function discoverExternalContextFiles(
     }
 
     const files = [];
+    const pendingSeen = new Set();
     let directoryCount = 0;
     let limitExceeded = false;
 
@@ -315,7 +326,7 @@ export async function discoverExternalContextFiles(
               resolvedPath,
               originalPath,
               relativePath,
-              { skipGitClassification: true },
+              { skipGitClassification: true, pendingSeen },
             );
             if (file) {
               files.push(file);
@@ -333,6 +344,9 @@ export async function discoverExternalContextFiles(
         `Referenced directory ${directoryPath} exceeds the discovery safety limit of ${maxDirectoryFiles} files or ${maxDirectoryDirectories} directories and was skipped.`,
       );
       return [];
+    }
+    for (const resolvedPath of pendingSeen) {
+      seen.add(resolvedPath);
     }
     return files;
   }
