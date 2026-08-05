@@ -1,4 +1,4 @@
-import { mkdir, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -89,6 +89,45 @@ function expandHomePath(filePath, homeDirectory) {
     return path.join(homeDirectory, filePath.slice(2));
   }
   return filePath;
+}
+
+export async function userDownloadsDirectory({
+  homeDirectory = os.homedir(),
+  platform = process.platform,
+  env = process.env,
+  readText = readFile,
+} = {}) {
+  const fallback = path.join(homeDirectory, "Downloads");
+  if (platform !== "linux") {
+    return fallback;
+  }
+
+  const configDirectory =
+    env.XDG_CONFIG_HOME || path.join(homeDirectory, ".config");
+  try {
+    const config = await readText(
+      path.join(configDirectory, "user-dirs.dirs"),
+      "utf8",
+    );
+    const match = config.match(
+      /^XDG_DOWNLOAD_DIR=(?:"([^"]*)"|'([^']*)'|(\S+))\s*$/m,
+    );
+    const configured = match?.[1] ?? match?.[2] ?? match?.[3];
+    if (!configured) {
+      return fallback;
+    }
+    const expanded = configured
+      .replaceAll("${HOME}", homeDirectory)
+      .replaceAll("$HOME", homeDirectory);
+    return path.isAbsolute(expanded)
+      ? path.normalize(expanded)
+      : path.resolve(homeDirectory, expanded);
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+      return fallback;
+    }
+    throw error;
+  }
 }
 
 async function repositoryMetadata(workingDirectory) {
@@ -424,7 +463,6 @@ export function createCommands({
   if (!session) {
     throw new Error("A Copilot session is required.");
   }
-
   let saveInProgress = false;
 
   return {
@@ -439,6 +477,9 @@ export function createCommands({
       saveInProgress = true;
       try {
         let { outputDirectory, title } = parseSaveArguments(rawArguments);
+        const defaultOutputDirectory = await userDownloadsDirectory({
+          homeDirectory,
+        });
         await session.log(
           "Copilot Stash2D save started. Wait for a saved-path confirmation or error before sending another message or running /stash2d-save again.",
           { level: "info" },
@@ -473,7 +514,7 @@ export function createCommands({
             "Where should the Copilot Stash2D archive folder be created?",
             {
               title: "Copilot Stash2D",
-              default: activeCwd,
+              default: defaultOutputDirectory,
             },
           );
           if (promptedOutput === null) {
@@ -483,7 +524,7 @@ export function createCommands({
             );
             return;
           }
-          outputDirectory = promptedOutput || activeCwd;
+          outputDirectory = promptedOutput || defaultOutputDirectory;
         }
         outputDirectory = path.resolve(
           activeCwd,

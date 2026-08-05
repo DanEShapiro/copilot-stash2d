@@ -10,6 +10,7 @@ import {
 import {
   createCommands,
   sanitizeRemoteUrl,
+  userDownloadsDirectory,
 } from "../src/commands.mjs";
 import { fakeSession, temporaryDirectory, writeText } from "./helpers.mjs";
 
@@ -31,6 +32,40 @@ test("removes credentials from repository remote URLs", () => {
   assert.equal(
     sanitizeRemoteUrl("ssh://alice:secret@host/repo.git"),
     "ssh://alice@host/repo.git",
+  );
+});
+
+test("uses the Linux XDG Downloads directory when configured", async () => {
+  const homeDirectory = path.resolve("home", "example");
+  const downloadsDirectory = path.join(homeDirectory, "Shared Downloads");
+
+  assert.equal(
+    await userDownloadsDirectory({
+      homeDirectory,
+      platform: "linux",
+      env: {},
+      readText: async () => 'XDG_DOWNLOAD_DIR="$HOME/Shared Downloads"\n',
+    }),
+    downloadsDirectory,
+  );
+});
+
+test("falls back to the home Downloads directory on other platforms", async () => {
+  const homeDirectory = path.join("Users", "example");
+
+  assert.equal(
+    await userDownloadsDirectory({
+      homeDirectory,
+      platform: "win32",
+    }),
+    path.join(homeDirectory, "Downloads"),
+  );
+  assert.equal(
+    await userDownloadsDirectory({
+      homeDirectory,
+      platform: "darwin",
+    }),
+    path.join(homeDirectory, "Downloads"),
   );
 });
 
@@ -537,8 +572,35 @@ test("cancelling save title or destination prompts creates no archive", async (t
   assert.deepEqual(await readdir(directory), []);
 });
 
+test("defaults the prompted save destination to the user's Downloads directory", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const homeDirectory = path.join(directory, "home");
+  const downloadsDirectory = path.join(homeDirectory, "Downloads");
+  const session = fakeSession({ inputs: ["prompted title", ""] });
+  const commands = createCommands({
+    session,
+    cwd: directory,
+    homeDirectory,
+    now: () => new Date(FIXED_DATE),
+  });
+
+  await commands.save("");
+
+  assert.equal(session.inputRequests[1].options.default, downloadsDirectory);
+  assert.equal(
+    await pathExists(
+      path.join(
+        downloadsDirectory,
+        archiveFolderName("prompted title", FIXED_DATE),
+      ),
+    ),
+    true,
+  );
+});
+
 test("uses safe defaults and skips external context without elicitation", async (t) => {
   const directory = await temporaryDirectory(t);
+  const homeDirectory = path.join(directory, "home");
   const externalPath = path.join(directory, "external.txt");
   await writeText(externalPath, "external");
   const session = fakeSession({
@@ -554,13 +616,15 @@ test("uses safe defaults and skips external context without elicitation", async 
   const commands = createCommands({
     session,
     cwd: path.join(directory, "initial"),
+    homeDirectory,
     now: () => new Date(FIXED_DATE),
   });
 
   await commands.save("");
 
   const archivePath = path.join(
-    directory,
+    homeDirectory,
+    "Downloads",
     archiveFolderName("session", FIXED_DATE),
   );
   assert.equal(await pathExists(archivePath), true);

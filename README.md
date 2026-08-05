@@ -23,9 +23,9 @@ If the commands are unavailable, run `/experimental on`, then restart Copilot.
 
 Stash2D asks for a name and destination when interactive input is available,
 then exports the session through Copilot's public API. Without interactive
-input, omitted values default to the title `session` and the active `/cwd`.
-Cancelling either interactive prompt cancels the save without creating an
-archive.
+input, omitted values default to the title `session` and the user's
+`Downloads` directory. The destination prompt also defaults to `Downloads`.
+Cancelling either interactive prompt cancels the save without creating an archive.
 `/share` is not required.
 
 Values can also be supplied inline:

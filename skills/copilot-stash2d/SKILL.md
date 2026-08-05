@@ -58,8 +58,9 @@ archive validation, and archive attachment.
 
    Omit unknown flags. The command will ask for a title and destination when
    interactive input is available; otherwise omitted values default to the
-   title `session` and the active `/cwd`. Cancelling either prompt cancels the
-   save without creating an archive.
+   title `session` and the user's `Downloads` directory. The destination prompt
+   also defaults to `Downloads`. Cancelling either prompt cancels the save
+   without creating an archive.
    Natural-language routing cannot execute the extension command; explicitly
    tell the user to enter the slash command at the Copilot prompt.
 2. Explain that save reads the public session event history, copies available
