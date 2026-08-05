@@ -100,3 +100,26 @@ test("external reference discovery uses only user-authored content", () => {
   assert.doesNotMatch(markdown, /tool\.txt/);
   assert.doesNotMatch(markdown, /python/);
 });
+
+test("external reference discovery ignores quoted Stash2D directory warnings", () => {
+  const markdown = renderExternalReferenceMarkdown([
+    {
+      type: "user.message",
+      data: {
+        content: [
+          "This appeared during my last save:",
+          "",
+          "Referenced directory C:\\Windows\\assembly exceeds the discovery safety limit of 200 files or 50 directories and was skipped.",
+          "",
+          "> Referenced directory Q:\\spocore exceeds the discovery safety limit of 200 files or 50 directories and was skipped.",
+          "",
+          "Keep `C:\\Users\\me\\notes.txt`.",
+        ].join("\n"),
+      },
+    },
+  ]);
+
+  assert.doesNotMatch(markdown, /Windows\\assembly/);
+  assert.doesNotMatch(markdown, /Q:\\spocore/);
+  assert.match(markdown, /notes\.txt/);
+});

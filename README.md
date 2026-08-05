@@ -222,7 +222,8 @@ and stop if the same error repeats:
   generated archive as sensitive and redact it before storing or sharing it.
 - Stash2D discovers external paths only from user messages and user
   attachments. It does not turn model-generated tool arguments, tool output,
-  tracebacks, or assistant prose into candidates.
+  tracebacks, assistant prose, or quoted Stash2D directory-limit warnings into
+  candidates.
 - Stash2D displays every candidate in one native multi-select list. Explicitly
   referenced directories are grouped and show their eligible file count and
   total size. External content is copied only after explicit approval. If

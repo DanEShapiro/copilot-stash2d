@@ -70,12 +70,12 @@ archive validation, and archive attachment.
    "configuration."
 3. Explain that Stash2D discovers external paths only from user messages and
    user attachments. Model-generated tool arguments, assistant prose, tool
-   output, and tracebacks are ignored. It displays every candidate in one
-   native multi-select list. Explicitly referenced directories appear as
-   grouped candidates with their eligible file count and total size. It
-   excludes Git-repository files, Copilot internals, and the active session
-   workspace. If interactive confirmation is unavailable, it copies no
-   external content.
+   output, tracebacks, and quoted Stash2D directory-limit warnings are ignored.
+   It displays every candidate in one native multi-select list. Explicitly
+   referenced directories appear as grouped candidates with their eligible
+   file count and total size. It excludes Git-repository files, Copilot
+   internals, and the active session workspace. If interactive confirmation is
+   unavailable, it copies no external content.
 4. State the expected result: a timestamped directory containing `Session.md`,
    `Handoff.md`, `Metadata.json`, and any available `SessionState/`,
    `SessionFiles/`, and approved `Context/` files.

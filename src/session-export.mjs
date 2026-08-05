@@ -28,6 +28,13 @@ function attachmentSummary(attachments) {
   return `\n\n### Attachments\n\n${json(attachments)}`;
 }
 
+function removeGeneratedDiscoveryWarnings(content) {
+  return content.replace(
+    /^(?:>\s*)?Referenced directory .+ exceeds the discovery safety limit of \d+ files or \d+ directories and was skipped\.\s*$/gm,
+    "",
+  );
+}
+
 export function renderExternalReferenceMarkdown(events) {
   const sections = [];
   for (const event of events) {
@@ -37,7 +44,7 @@ export function renderExternalReferenceMarkdown(events) {
     const data = event.data ?? {};
     if (event.type === "user.message") {
       sections.push(
-        `${data.content ?? ""}${attachmentSummary(data.attachments)}`,
+        `${removeGeneratedDiscoveryWarnings(data.content ?? "")}${attachmentSummary(data.attachments)}`,
       );
     }
   }
