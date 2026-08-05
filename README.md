@@ -34,11 +34,12 @@ Values can also be supplied inline:
 /stash2d-save --output "~/Downloads" --title "weather API investigation"
 ```
 
-Stash2D may offer to include external files or directories referenced by the
-user or passed to tools that actually ran. Paths that only appear in assistant
-prose, tool output, tracebacks, or other generated results are ignored.
-Git-repository files, Copilot internals, and the active session workspace are
-also excluded.
+Stash2D may offer to include external files or directories explicitly present
+in user messages or user attachments. Tool arguments are model-generated
+implementation details and are not treated as archive intent. Paths that only
+appear in assistant prose, tool calls, tool output, tracebacks, or other
+generated results are ignored. Git-repository files, Copilot internals, and the
+active session workspace are also excluded.
 
 The chooser is a native multi-select list. Referenced directories appear as one
 group with their eligible file count and total size, so a directory can be
@@ -206,7 +207,7 @@ and stop if the same error repeats:
 | Public session event API fails | No archive is created. Update or restart Copilot CLI, reload the plugin, and retry once. |
 | `session.workspacePath` is unavailable | Save continues from the public transcript, omits unavailable session artifacts, and warns the user. |
 | Referenced external file is missing or inaccessible | The optional file is skipped with an aggregated warning; save continues. |
-| Referenced directory exceeds 10,000 files or 2,000 directories | The directory candidate is skipped with a warning so discovery cannot block the save indefinitely. Reference a smaller subdirectory or specific files. |
+| Referenced directory exceeds 1,000 files or 200 directories | The directory candidate is skipped with a warning so discovery cannot block the save indefinitely. Reference a smaller subdirectory or specific files. |
 | Plan/handoff generation fails or times out | Save fails and removes the incomplete archive when possible. Resolve the API/model issue before retrying. |
 | Handoff generation has more than 100 files or 50 MiB available | Save preserves every local file, generates the handoff from a bounded subset, and reports how many optional files were omitted from model attachments. |
 | Apply has more than 100 files or 50 MiB available | Stash2D keeps the core files selected and opens a multi-select chooser for optional files and directory contents. If interactive selection is unavailable, only the core files are attached. |
@@ -219,9 +220,9 @@ and stop if the same error repeats:
 - Stash2D does not scan or redact any exported source, including the transcript,
   tool output, plan, session artifacts, or approved external context. Treat the
   generated archive as sensitive and redact it before storing or sharing it.
-- Stash2D discovers external paths only from user messages, user attachments,
-  and arguments passed to tools that actually ran. It does not turn paths
-  printed in tool output, tracebacks, or assistant prose into candidates.
+- Stash2D discovers external paths only from user messages and user
+  attachments. It does not turn model-generated tool arguments, tool output,
+  tracebacks, or assistant prose into candidates.
 - Stash2D displays every candidate in one native multi-select list. Explicitly
   referenced directories are grouped and show their eligible file count and
   total size. External content is copied only after explicit approval. If
@@ -253,7 +254,7 @@ and stop if the same error repeats:
   complete archive exceeds the attachment budget.
 - Stash2D does not automatically chunk one archive across multiple model
   messages, and model-specific context limits may be lower.
-- External-directory discovery is bounded at 10,000 files or 2,000
+- External-directory discovery is bounded at 1,000 files or 200
   directories per referenced directory. Git trees, nested repositories,
   symlinks, and excluded roots are pruned before copying.
 - `Metadata.json` is limited separately to 1 MiB before it is parsed.

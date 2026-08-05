@@ -39,8 +39,6 @@ export function renderExternalReferenceMarkdown(events) {
       sections.push(
         `${data.content ?? ""}${attachmentSummary(data.attachments)}`,
       );
-    } else if (event.type === "tool.execution_start") {
-      sections.push(json(data.arguments ?? {}));
     }
   }
   return sections.join("\n\n");

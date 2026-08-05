@@ -68,14 +68,14 @@ archive validation, and archive attachment.
    It does not copy Copilot authentication, installed plugins, settings, or
    model configuration; clarify this when the user asks to preserve
    "configuration."
-3. Explain that Stash2D discovers external paths only from user messages, user
-   attachments, and arguments passed to tools that actually ran. Paths printed
-   only in assistant prose, tool output, or tracebacks are ignored. It displays
-   every candidate in one native multi-select list. Explicitly referenced
-   directories appear as grouped candidates with their eligible file count and
-   total size. It excludes Git-repository files, Copilot internals, and the
-   active session workspace. If interactive confirmation is unavailable, it
-   copies no external content.
+3. Explain that Stash2D discovers external paths only from user messages and
+   user attachments. Model-generated tool arguments, assistant prose, tool
+   output, and tracebacks are ignored. It displays every candidate in one
+   native multi-select list. Explicitly referenced directories appear as
+   grouped candidates with their eligible file count and total size. It
+   excludes Git-repository files, Copilot internals, and the active session
+   workspace. If interactive confirmation is unavailable, it copies no
+   external content.
 4. State the expected result: a timestamped directory containing `Session.md`,
    `Handoff.md`, `Metadata.json`, and any available `SessionState/`,
    `SessionFiles/`, and approved `Context/` files.
@@ -169,7 +169,7 @@ EVAL-INTENT: /stash2d-save -> prompted directory | export the current public Cop
 - **External path inaccessible:** explain that optional path was skipped. Do
   not turn an unavailable external file into a fatal save error.
 - **Referenced directory exceeds discovery limits:** explain that directories
-  above 10,000 files or 2,000 directories are skipped to prevent an unbounded
+  above 1,000 files or 200 directories are skipped to prevent an unbounded
   walk. Recommend referencing a smaller subdirectory or specific files.
 - **Generation or attachment failure:** report the original error. Save removes
   its incomplete archive when possible. There are no automatic retries.

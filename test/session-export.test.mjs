@@ -72,7 +72,7 @@ test("renders main-session activity and omits subagent internals", () => {
   assert.doesNotMatch(markdown, /internal subagent chatter/);
 });
 
-test("external reference discovery excludes assistant prose and tool output", () => {
+test("external reference discovery uses only user-authored content", () => {
   const markdown = renderExternalReferenceMarkdown([
     {
       type: "user.message",
@@ -97,6 +97,6 @@ test("external reference discovery excludes assistant prose and tool output", ()
   ]);
 
   assert.match(markdown, /user\.txt/);
-  assert.match(markdown, /tool\.txt/);
+  assert.doesNotMatch(markdown, /tool\.txt/);
   assert.doesNotMatch(markdown, /python/);
 });

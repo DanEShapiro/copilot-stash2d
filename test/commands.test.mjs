@@ -421,6 +421,48 @@ test("selects a referenced directory as one grouped item", async (t) => {
   );
 });
 
+test("does not offer paths discovered only through tool execution", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const internalPath = path.join(directory, "internal", "generated.txt");
+  await writeText(internalPath, "internal");
+  const session = fakeSession({
+    events: [
+      {
+        type: "user.message",
+        data: { content: "Investigate the build." },
+      },
+      {
+        type: "tool.execution_start",
+        data: {
+          toolName: "view",
+          arguments: { path: internalPath },
+        },
+      },
+      {
+        type: "tool.execution_complete",
+        data: {
+          success: true,
+          result: { content: `Read ${internalPath}` },
+        },
+      },
+    ],
+  });
+  const commands = createCommands({
+    session,
+    cwd: directory,
+    now: () => new Date(FIXED_DATE),
+  });
+
+  await commands.save(`--output "${directory}" --title "user paths only"`);
+
+  const archivePath = path.join(
+    directory,
+    archiveFolderName("user paths only", FIXED_DATE),
+  );
+  assert.equal(await pathExists(path.join(archivePath, "Context")), false);
+  assert.equal(session.elicitationRequests.length, 0);
+});
+
 test("can cancel external context review without creating an archive", async (t) => {
   const directory = await temporaryDirectory(t);
   const externalPath = path.join(directory, "Downloads", "input.txt");
