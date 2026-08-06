@@ -6,6 +6,15 @@ It is the successor to [git-stash2d](https://github.com/DanEShapiro/git-stash2d)
 
 ## Install
 
+From the Agency Playground marketplace:
+
+```text
+/plugin marketplace add agency-microsoft/playground
+/plugin install copilot-stash2d@agency-playground
+```
+
+Or install directly from the source repository:
+
 ```shell
 copilot plugin install DanEShapiro/copilot-stash2d
 ```

@@ -877,21 +877,21 @@ export function createCommands({
         archivePath,
         sourceAttachments,
         async (attachments) => {
-        try {
-          await session.log(
-            `Copilot Stash2D is attaching ${attachments.length} archive file(s).`,
-            { level: "info" },
-          );
-          await session.send({
-            prompt: APPLY_PROMPT,
-            displayPrompt: `Apply Copilot Stash2D archive: ${archivePath}`,
-            attachments,
-          });
-        } catch (error) {
-          throw new Error(
-            `The public Copilot extension attachment API could not apply this archive. Check the Copilot CLI and plugin versions. ${error.message}`,
-          );
-        }
+          try {
+            await session.log(
+              `Copilot Stash2D is attaching ${attachments.length} archive file(s).`,
+              { level: "info" },
+            );
+            await session.send({
+              prompt: APPLY_PROMPT,
+              displayPrompt: `Apply Copilot Stash2D archive: ${archivePath}`,
+              attachments,
+            });
+          } catch (error) {
+            throw new Error(
+              `The public Copilot extension attachment API could not apply this archive. Check the Copilot CLI and plugin versions. ${error.message}`,
+            );
+          }
         },
         {
           onCleanupError: (error) =>
