@@ -3,8 +3,8 @@ import { lstat, mkdir, open, rm } from "node:fs/promises";
 import path from "node:path";
 
 export class SourceFileChangedError extends Error {
-  constructor(filePath) {
-    super(`Source file changed while it was being copied: ${filePath}`);
+  constructor(filePath, operation = "copied") {
+    super(`Source file changed while it was being ${operation}: ${filePath}`);
     this.code = "SOURCE_CHANGED";
   }
 }
@@ -15,6 +15,15 @@ export class SourceFileCopyError extends Error {
       cause,
     });
     this.code = cause.code ?? "SOURCE_COPY_FAILED";
+  }
+}
+
+export class SourceFileReadError extends Error {
+  constructor(filePath, cause) {
+    super(`Source file could not be read: ${filePath}. ${cause.message}`, {
+      cause,
+    });
+    this.code = cause.code ?? "SOURCE_READ_FAILED";
   }
 }
 
@@ -262,7 +271,7 @@ export async function copyVerifiedFile(
         await destinationHandle.close();
         destinationClosed = true;
       } catch (error) {
-        failure = new DestinationFileCopyError(destinationPath, error);
+        failure ??= new DestinationFileCopyError(destinationPath, error);
       }
     }
     if (sourceHandle) {
@@ -278,7 +287,7 @@ export async function copyVerifiedFile(
       try {
         await removeFile(destinationPath, { force: true });
       } catch (error) {
-        failure = new DestinationFileCopyError(destinationPath, error);
+        failure ??= new DestinationFileCopyError(destinationPath, error);
       }
     }
     if (failure) {
@@ -300,40 +309,78 @@ export async function readVerifiedFile(
   }
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
   let handle;
+  let failure;
   try {
     try {
       handle = await openFile(sourcePath, fsConstants.O_RDONLY | noFollow);
     } catch (error) {
-      throw new SourceFileCopyError(sourcePath, error);
+      throw new SourceFileReadError(sourcePath, error);
     }
-    const beforeInfo = await handle.stat();
+    let beforeInfo;
+    try {
+      beforeInfo = await handle.stat();
+    } catch (error) {
+      throw new SourceFileReadError(sourcePath, error);
+    }
     if (!beforeInfo.isFile() || !sameIdentity(beforeInfo, expectedIdentity)) {
-      throw new SourceFileChangedError(sourcePath);
+      throw new SourceFileChangedError(sourcePath, "read");
     }
     const content = Buffer.allocUnsafe(expectedIdentity.byteSize);
     let offset = 0;
     while (offset < content.length) {
-      const { bytesRead } = await handle.read(
-        content,
-        offset,
-        content.length - offset,
-        null,
-      );
+      let bytesRead;
+      try {
+        ({ bytesRead } = await handle.read(
+          content,
+          offset,
+          content.length - offset,
+          null,
+        ));
+      } catch (error) {
+        throw new SourceFileReadError(sourcePath, error);
+      }
       if (bytesRead === 0) {
-        throw new SourceFileChangedError(sourcePath);
+        throw new SourceFileChangedError(sourcePath, "read");
       }
       offset += bytesRead;
     }
     const extra = Buffer.allocUnsafe(1);
-    if ((await handle.read(extra, 0, 1, null)).bytesRead !== 0) {
-      throw new SourceFileChangedError(sourcePath);
+    let extraBytesRead;
+    try {
+      ({ bytesRead: extraBytesRead } = await handle.read(
+        extra,
+        0,
+        1,
+        null,
+      ));
+    } catch (error) {
+      throw new SourceFileReadError(sourcePath, error);
     }
-    const afterInfo = await handle.stat();
+    if (extraBytesRead !== 0) {
+      throw new SourceFileChangedError(sourcePath, "read");
+    }
+    let afterInfo;
+    try {
+      afterInfo = await handle.stat();
+    } catch (error) {
+      throw new SourceFileReadError(sourcePath, error);
+    }
     if (!sameIdentity(afterInfo, fileIdentity(beforeInfo))) {
-      throw new SourceFileChangedError(sourcePath);
+      throw new SourceFileChangedError(sourcePath, "read");
     }
     return content;
+  } catch (error) {
+    failure = error;
+    throw error;
   } finally {
-    await handle?.close();
+    if (handle) {
+      try {
+        await handle.close();
+      } catch (error) {
+        if (!failure) {
+          throw new SourceFileReadError(sourcePath, error);
+        }
+      }
+    }
   }
 }
