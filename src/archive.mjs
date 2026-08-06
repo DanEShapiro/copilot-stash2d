@@ -283,7 +283,11 @@ export async function copyArchiveSnapshotFiles(
       resolvedAttachmentPath,
       destinationPath,
       attachment.identity,
-      { trustedDestinationRoot: resolvedDestinationRoot },
+      {
+        beforeCopy: () =>
+          assertNoLinkedPathComponents(resolvedAttachmentPath),
+        trustedDestinationRoot: resolvedDestinationRoot,
+      },
     );
   }
 }

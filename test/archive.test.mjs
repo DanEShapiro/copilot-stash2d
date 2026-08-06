@@ -243,3 +243,40 @@ test("rejects snapshot source paths outside the archive root", async (t) => {
     false,
   );
 });
+
+test("rejects linked snapshot source path components", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const sourceRoot = path.join(directory, "source");
+  const destinationRoot = path.join(directory, "snapshot");
+  const outsideRoot = path.join(directory, "outside");
+  const outsidePath = path.join(outsideRoot, "input.txt");
+  const linkedContext = path.join(sourceRoot, "Context");
+  await mkdir(sourceRoot);
+  await writeText(outsidePath, "outside");
+  await symlink(
+    outsideRoot,
+    linkedContext,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const info = await stat(outsidePath);
+
+  await assert.rejects(
+    copyArchiveSnapshotFiles(sourceRoot, destinationRoot, [
+      {
+        displayName: "Context/input.txt",
+        path: path.join(linkedContext, "input.txt"),
+        identity: {
+          device: info.dev,
+          inode: info.ino,
+          byteSize: info.size,
+          mtimeMs: info.mtimeMs,
+        },
+      },
+    ]),
+    /Linked path components are not supported/,
+  );
+  assert.equal(
+    await pathExists(path.join(destinationRoot, "Context", "input.txt")),
+    false,
+  );
+});
