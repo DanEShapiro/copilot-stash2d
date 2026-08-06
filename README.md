@@ -233,9 +233,8 @@ and stop if the same error repeats:
   generated archive as sensitive and redact it before storing or sharing it.
 - Stash2D discovers external paths only from user messages and structured user
   attachments. It does not grant attachment provenance to path-shaped JSON in
-  message text or turn model-generated tool arguments, tool output,
-  tracebacks, assistant prose, or quoted Stash2D directory-limit warnings into
-  candidates.
+  message text or turn model-generated tool arguments, tool output, or
+  assistant prose into candidates. All user-message text is considered.
 - Stash2D displays every candidate in one native multi-select list. Explicitly
   referenced directories are grouped and show their eligible file count and
   total size. External content is copied only after explicit approval. If
