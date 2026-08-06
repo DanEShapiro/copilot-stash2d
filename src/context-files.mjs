@@ -706,6 +706,9 @@ export async function copyExternalContextFiles(
   archivePath,
   {
     beforeCopyContextFile = async () => {},
+    maxBytes = Number.POSITIVE_INFINITY,
+    maxDirectories = Number.POSITIVE_INFINITY,
+    maxEntries = Number.POSITIVE_INFINITY,
     onWarning = async () => {},
   } = {},
 ) {
@@ -713,10 +716,8 @@ export async function copyExternalContextFiles(
   if (candidates.length === 0) {
     return entries;
   }
-  const contextPath = path.join(archivePath, "Context");
-  await mkdir(contextPath, { recursive: true });
-  const skippedSourceErrors = new Set();
   const usedArchiveNodes = new Map();
+  const plannedFiles = [];
 
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
@@ -754,6 +755,30 @@ export async function copyExternalContextFiles(
         archiveSegments,
         usedArchiveNodes,
       );
+      plannedFiles.push({ archivedPath, file });
+    }
+  }
+  const plannedBytes = plannedFiles.reduce(
+    (total, planned) => total + planned.file.byteSize,
+    0,
+  );
+  const plannedDirectories = [...usedArchiveNodes.values()].filter(
+    (node) => node.type === "directory",
+  ).length;
+  if (
+    usedArchiveNodes.size > maxEntries ||
+    plannedDirectories > maxDirectories ||
+    plannedBytes > maxBytes
+  ) {
+    throw new Error(
+      `Approved external context exceeds the remaining archive safety budget of ${maxEntries} entries, ${maxDirectories} directories, or ${maxBytes} bytes.`,
+    );
+  }
+
+  const contextPath = path.join(archivePath, "Context");
+  await mkdir(contextPath, { recursive: true });
+  const skippedSourceErrors = new Set();
+  for (const { archivedPath, file } of plannedFiles) {
       try {
         await copyVerifiedFile(
           file.resolvedPath,
@@ -781,7 +806,6 @@ export async function copyExternalContextFiles(
         archivedPath: archivedPath.split(path.sep).join("/"),
         byteSize: file.byteSize,
       });
-    }
   }
   if (skippedSourceErrors.size > 0) {
     await onWarning(

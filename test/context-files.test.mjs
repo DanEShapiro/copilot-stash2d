@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
+  access,
   mkdir,
   readFile,
   realpath,
@@ -557,6 +558,29 @@ test("copies approved external context with collision-safe names", async (t) => 
 
   assert.equal(entries[0].archivedPath, "Context/001-input.txt");
   assert.equal(entries[1].archivedPath, "Context/002-input.txt");
+});
+
+test("rejects external context that exceeds the remaining archive budget", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "input.txt");
+  const archive = path.join(directory, "archive");
+  await writeText(source, "input");
+
+  await assert.rejects(
+    copyExternalContextFiles(
+      [{
+        originalPath: source,
+        resolvedPath: source,
+        byteSize: 5,
+      }],
+      archive,
+      { maxEntries: 2, maxDirectories: 0, maxBytes: 5 },
+    ),
+    /remaining archive safety budget/,
+  );
+  await assert.rejects(access(path.join(archive, "Context")), {
+    code: "ENOENT",
+  });
 });
 
 test("avoids collisions after sanitizing directory file names", async (t) => {

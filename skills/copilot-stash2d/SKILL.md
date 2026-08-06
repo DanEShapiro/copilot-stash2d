@@ -196,6 +196,9 @@ EVAL-INTENT: /stash2d-save -> prompted directory | export the current public Cop
 - **Archive exceeds structural limits:** explain that archives are bounded at
   6,000 entries, 1,000 directories, 64 levels of nesting, and 1 GiB, with at
   most 1,000 chooser items. Recommend reducing or regrouping the archive.
+- **Generated plan or handoff exceeds 1 MiB:** report that the generated file
+  exceeded its safety limit and recommend reducing the session transcript or
+  context before retrying.
 
 Never loop on a failing command. Retry only after a concrete remediation, and
 at most once for the same failure.

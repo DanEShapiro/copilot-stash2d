@@ -9,12 +9,28 @@ import {
 } from "../src/archive.mjs";
 import {
   createCommands,
+  remainingContextBudget,
   sanitizeRemoteUrl,
   userDownloadsDirectory,
 } from "../src/commands.mjs";
 import { fakeSession, temporaryDirectory, writeText } from "./helpers.mjs";
 
 const FIXED_DATE = new Date(2026, 6, 31, 21, 36, 7);
+
+test("reserves whole-archive capacity before copying external context", () => {
+  assert.deepEqual(
+    remainingContextBudget({
+      hasPlan: false,
+      sessionUsage: { entries: 100, directories: 3, bytes: 200 },
+      transcriptBytes: 300,
+    }),
+    {
+      entries: 5895,
+      directories: 995,
+      bytes: 1070595596,
+    },
+  );
+});
 
 test("removes credentials from repository remote URLs", () => {
   assert.equal(

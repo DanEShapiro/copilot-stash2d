@@ -119,6 +119,7 @@ export async function copyTree(
     maxDirectories = MAX_ARCHIVE_DIRECTORIES,
     maxEntries = MAX_ARCHIVE_ENTRIES,
     beforeCopy = async () => {},
+    onUsage = async () => {},
   } = {},
 ) {
   const resolvedRoot = await realpath(sourceRoot);
@@ -206,6 +207,11 @@ export async function copyTree(
   }
 
   await visit(sourceRoot, destinationRoot, "");
+  await onUsage({
+    entries: entryCount + 1,
+    directories: directoryCount,
+    bytes: totalBytes,
+  });
   return copied;
 }
 

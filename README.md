@@ -279,6 +279,8 @@ and stop if the same error repeats:
 - External-directory discovery is bounded at 200 eligible files, 50
   directories, or 1,000 inspected entries per referenced directory. Git trees,
   nested repositories, symlinks, and excluded roots are pruned before copying.
+- Generated plan and handoff files are each limited to 1 MiB. Save reserves
+  capacity for those files and `Metadata.json` before copying approved context.
 - `Metadata.json` is limited separately to 1 MiB before it is parsed.
 - Complete archives are bounded at 6,000 entries, 1,000 directories, 64
   levels of nesting, and 1 GiB. Choosers are bounded at 1,000 items.

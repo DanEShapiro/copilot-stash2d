@@ -20,6 +20,7 @@ import {
   inspectArchive,
   listFilesRecursively,
   MAX_ARCHIVE_BYTES,
+  MAX_ARCHIVE_DIRECTORIES,
   MAX_ARCHIVE_ENTRIES,
   pathExists,
   removeIncompleteArchive,
@@ -50,6 +51,20 @@ const execFileAsync = promisify(execFile);
 const MAX_ATTACHMENT_FILES = 100;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const MAX_CHOOSER_ITEMS = 1000;
+const MAX_GENERATED_FILE_BYTES = 1024 * 1024;
+const MISSING_PLAN_USAGE = Object.freeze({
+  entries: 2,
+  directories: 1,
+  bytes: MAX_GENERATED_FILE_BYTES,
+});
+
+function requiredArchiveUsage(transcriptBytes) {
+  return {
+    entries: 3,
+    directories: 1,
+    bytes: transcriptBytes + (2 * MAX_GENERATED_FILE_BYTES),
+  };
+}
 
 async function requireDirectory(directoryPath) {
   let info;
@@ -316,6 +331,49 @@ function candidateUsage(candidates) {
       0,
     ),
   };
+}
+
+export function remainingContextBudget({
+  hasPlan,
+  sessionUsage,
+  transcriptBytes,
+}) {
+  const requiredUsage = requiredArchiveUsage(transcriptBytes);
+  const planUsage = hasPlan
+    ? { entries: 0, directories: 0, bytes: 0 }
+    : MISSING_PLAN_USAGE;
+  return {
+    entries:
+      MAX_ARCHIVE_ENTRIES -
+      requiredUsage.entries -
+      sessionUsage.entries -
+      planUsage.entries,
+    directories:
+      MAX_ARCHIVE_DIRECTORIES -
+      requiredUsage.directories -
+      sessionUsage.directories -
+      planUsage.directories,
+    bytes:
+      MAX_ARCHIVE_BYTES -
+      requiredUsage.bytes -
+      sessionUsage.bytes -
+      planUsage.bytes,
+  };
+}
+
+function assertGeneratedFileBudget(content, label, archiveBytes) {
+  const byteSize = Buffer.byteLength(content);
+  if (byteSize > MAX_GENERATED_FILE_BYTES) {
+    throw new Error(
+      `${label} exceeds the safety limit of ${MAX_GENERATED_FILE_BYTES} bytes.`,
+    );
+  }
+  if (archiveBytes + byteSize > MAX_ARCHIVE_BYTES) {
+    throw new Error(
+      `${label} would exceed the archive safety limit of ${MAX_ARCHIVE_BYTES} bytes.`,
+    );
+  }
+  return byteSize;
 }
 
 function fitsCandidateBudget(candidates, maxFiles, maxBytes) {
@@ -651,17 +709,6 @@ export function createCommands({
           });
           return;
         }
-        const approvedContextUsage = candidateUsage(
-          contextReview.approved,
-        );
-        if (
-          approvedContextUsage.files > MAX_ARCHIVE_ENTRIES ||
-          approvedContextUsage.bytes > MAX_ARCHIVE_BYTES
-        ) {
-          throw new Error(
-            `Approved external context exceeds the archive safety limits of ${MAX_ARCHIVE_ENTRIES} files or ${MAX_ARCHIVE_BYTES} bytes.`,
-          );
-        }
         await session.log(
           "Copilot Stash2D is creating the archive files.",
           { level: "info" },
@@ -680,9 +727,14 @@ export function createCommands({
 
         try {
           await writeFile(path.join(archivePath, "Session.md"), transcript, "utf8");
+          const transcriptBytes = Buffer.byteLength(transcript);
           const sessionArtifacts = await copySessionArtifacts(
             session.workspacePath,
             archivePath,
+            {
+              missingPlanUsage: MISSING_PLAN_USAGE,
+              reservedUsage: requiredArchiveUsage(transcriptBytes),
+            },
           );
           if (sessionArtifacts.unavailable) {
             await session.log(
@@ -690,14 +742,38 @@ export function createCommands({
               { level: "warning" },
             );
           }
+          const contextBudget = remainingContextBudget({
+            hasPlan: sessionArtifacts.hasPlan,
+            sessionUsage: sessionArtifacts.usage,
+            transcriptBytes,
+          });
+          if (
+            contextBudget.entries < 0 ||
+            contextBudget.directories < 0 ||
+            contextBudget.bytes < 0
+          ) {
+            throw new Error(
+              "Session transcript and artifacts leave no room for the required archive files within the archive safety limits.",
+            );
+          }
           const externalContext = await copyExternalContextFiles(
             contextReview.approved.map((item) => item.payload),
             archivePath,
             {
+              maxBytes: contextBudget.bytes,
+              maxDirectories: contextBudget.directories,
+              maxEntries: contextBudget.entries,
               onWarning: (message) =>
                 session.log(message, { level: "warning" }),
             },
           );
+          let archiveBytes =
+            transcriptBytes +
+            sessionArtifacts.usage.bytes +
+            externalContext.reduce(
+              (total, entry) => total + entry.byteSize,
+              0,
+            );
           const sourceAttachments = [fileAttachment(archivePath, "Session.md")];
           if (!sessionArtifacts.hasPlan) {
             await session.log(
@@ -711,6 +787,11 @@ export function createCommands({
               sourceAttachments,
             );
             const planContent = `${generatedPlan.trim()}\n`;
+            const planBytes = assertGeneratedFileBudget(
+              planContent,
+              "Generated continuation plan",
+              archiveBytes,
+            );
             await mkdir(path.join(archivePath, "SessionState"), {
               recursive: true,
             });
@@ -722,8 +803,9 @@ export function createCommands({
             sessionArtifacts.entries.push({
               role: "generated-plan",
               archivedPath: "SessionState/plan.md",
-              byteSize: Buffer.byteLength(planContent),
+              byteSize: planBytes,
             });
+            archiveBytes += planBytes;
           }
           const additionalContext = (
             await Promise.all(
@@ -762,8 +844,14 @@ export function createCommands({
             "Handoff.md",
             handoffAttachments.attachments,
           );
+          const handoffContent = `${handoff.trim()}\n`;
+          archiveBytes += assertGeneratedFileBudget(
+            handoffContent,
+            "Generated handoff",
+            archiveBytes,
+          );
           await writeHandoff(archivePath, handoff);
-          await writeMetadata(archivePath, {
+          const metadata = {
             formatVersion: ARCHIVE_FORMAT_VERSION,
             pluginVersion: PLUGIN_VERSION,
             title,
@@ -774,7 +862,14 @@ export function createCommands({
             repository: await repositoryMetadata(activeCwd),
             sessionArtifacts: sessionArtifacts.entries,
             externalContext,
-          });
+          };
+          const metadataContent = `${JSON.stringify(metadata, null, 2)}\n`;
+          assertGeneratedFileBudget(
+            metadataContent,
+            "Archive metadata",
+            archiveBytes,
+          );
+          await writeMetadata(archivePath, metadata);
           await validateArchive(archivePath);
         } catch (error) {
           try {
