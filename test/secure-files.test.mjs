@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
+import {
+  access,
+  mkdir,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import {
   assertNoLinkedPathComponents,
   copyVerifiedFile,
   DestinationFileCopyError,
+  fileIdentity,
 } from "../src/secure-files.mjs";
 import { temporaryDirectory } from "./helpers.mjs";
 
@@ -21,6 +29,36 @@ test("allows explicitly configured operating-system path aliases", async () => {
       }),
     }),
   );
+});
+
+test("rejects linked destination directory components", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const sourcePath = path.join(directory, "source.txt");
+  const archivePath = path.join(directory, "archive");
+  const outsidePath = path.join(directory, "outside");
+  const linkedPath = path.join(archivePath, "linked");
+  const escapedPath = path.join(outsidePath, "escaped.txt");
+  await writeFile(sourcePath, "content");
+  await mkdir(archivePath);
+  await mkdir(outsidePath);
+  await symlink(
+    outsidePath,
+    linkedPath,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+
+  await assert.rejects(
+    copyVerifiedFile(
+      sourcePath,
+      path.join(linkedPath, "escaped.txt"),
+      fileIdentity(await stat(sourcePath)),
+      { trustedDestinationRoot: archivePath },
+    ),
+    (error) =>
+      error instanceof DestinationFileCopyError &&
+      error.code === "SYMLINK",
+  );
+  await assert.rejects(access(escapedPath), { code: "ENOENT" });
 });
 
 test("rolls back a destination when close reports a writeback failure", async (t) => {
@@ -77,6 +115,7 @@ test("rolls back a destination when close reports a writeback failure", async (t
       removeFile: async () => {
         removed = true;
       },
+      trustedDestinationRoot: directory,
     }),
     (error) =>
       error instanceof DestinationFileCopyError && error.code === "EIO",
@@ -137,6 +176,7 @@ test("rolls back a destination when the source handle cannot close", async (t) =
       removeFile: async () => {
         removed = true;
       },
+      trustedDestinationRoot: directory,
     }),
     /source close failed/,
   );

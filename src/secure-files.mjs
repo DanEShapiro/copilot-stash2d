@@ -84,6 +84,72 @@ export async function assertNoLinkedPathComponents(
   }
 }
 
+async function createUnlinkedDirectoryPath(
+  directoryPath,
+  trustedRoot,
+  {
+    getLinkInfo = lstat,
+    makeDirectory = mkdir,
+  } = {},
+) {
+  const absoluteRoot = path.resolve(trustedRoot);
+  const absolutePath = path.resolve(directoryPath);
+  const relative = path.relative(absoluteRoot, absolutePath);
+  if (
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    const error = new Error(
+      `Destination path escapes its trusted root: ${absolutePath}`,
+    );
+    error.code = "PATH_ESCAPE";
+    throw error;
+  }
+  const rootInfo = await getLinkInfo(absoluteRoot);
+  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
+    const error = new Error(
+      `Trusted destination root must be a real directory: ${absoluteRoot}`,
+    );
+    error.code = rootInfo.isSymbolicLink() ? "SYMLINK" : "ENOTDIR";
+    throw error;
+  }
+  let currentPath = absoluteRoot;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    currentPath = path.join(currentPath, segment);
+    let info;
+    try {
+      info = await getLinkInfo(currentPath);
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+      try {
+        await makeDirectory(currentPath);
+      } catch (mkdirError) {
+        if (mkdirError.code !== "EEXIST") {
+          throw mkdirError;
+        }
+      }
+      info = await getLinkInfo(currentPath);
+    }
+    if (info.isSymbolicLink()) {
+      const error = new Error(
+        `Linked path components are not supported: ${currentPath}`,
+      );
+      error.code = "SYMLINK";
+      throw error;
+    }
+    if (!info.isDirectory()) {
+      const error = new Error(
+        `Destination path component is not a directory: ${currentPath}`,
+      );
+      error.code = "ENOTDIR";
+      throw error;
+    }
+  }
+}
+
 export async function copyVerifiedFile(
   sourcePath,
   destinationPath,
@@ -92,8 +158,12 @@ export async function copyVerifiedFile(
     beforeCopy = async () => {},
     openFile = open,
     removeFile = rm,
+    trustedDestinationRoot,
   } = {},
 ) {
+  if (!trustedDestinationRoot) {
+    throw new TypeError("copyVerifiedFile requires a trusted destination root.");
+  }
   await beforeCopy(sourcePath, destinationPath);
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
   let sourceHandle;
@@ -117,7 +187,10 @@ export async function copyVerifiedFile(
     }
 
     try {
-      await mkdir(path.dirname(destinationPath), { recursive: true });
+      await createUnlinkedDirectoryPath(
+        path.dirname(destinationPath),
+        trustedDestinationRoot,
+      );
       destinationHandle = await openFile(
         destinationPath,
         fsConstants.O_WRONLY |

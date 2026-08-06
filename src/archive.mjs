@@ -78,7 +78,7 @@ export async function createArchiveDirectory(outputDirectory, title, date = new 
     archiveFolderName(title, date),
   );
   try {
-    await mkdir(archivePath);
+    await mkdir(archivePath, { mode: 0o700 });
   } catch (error) {
     if (error?.code === "EEXIST") {
       throw new Error(`Archive destination already exists: ${archivePath}`);
@@ -194,7 +194,10 @@ export async function copyTree(
       source,
       destination,
       fileIdentity(info),
-      { beforeCopy },
+      {
+        beforeCopy,
+        trustedDestinationRoot: destinationRoot,
+      },
     );
     copied.push({
       archivedPath: relativePath.split(path.sep).join("/"),
@@ -213,6 +216,7 @@ export async function copyArchiveSnapshotFiles(
 ) {
   const resolvedSourceRoot = path.resolve(sourceRoot);
   const resolvedDestinationRoot = path.resolve(destinationRoot);
+  let destinationReady = false;
   for (const attachment of attachments) {
     const relativePath = attachment.displayName
       .split("/")
@@ -260,10 +264,15 @@ export async function copyArchiveSnapshotFiles(
         `Archive attachment escaped its destination directory: ${attachment.displayName}`,
       );
     }
+    if (!destinationReady) {
+      await mkdir(resolvedDestinationRoot, { mode: 0o700 });
+      destinationReady = true;
+    }
     await copyVerifiedFile(
       resolvedAttachmentPath,
       destinationPath,
       attachment.identity,
+      { trustedDestinationRoot: resolvedDestinationRoot },
     );
   }
 }

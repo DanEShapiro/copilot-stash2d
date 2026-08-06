@@ -759,7 +759,10 @@ export async function copyExternalContextFiles(
           file.resolvedPath,
           path.join(archivePath, archivedPath),
           file,
-          { beforeCopy: beforeCopyContextFile },
+          {
+            beforeCopy: beforeCopyContextFile,
+            trustedDestinationRoot: archivePath,
+          },
         );
       } catch (error) {
         if (

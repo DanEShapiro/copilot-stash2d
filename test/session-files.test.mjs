@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { copySessionArtifacts } from "../src/session-files.mjs";
@@ -16,6 +16,7 @@ test("preserves plan.md and the complete session files tree", async (t) => {
     "notes",
   );
   await writeText(path.join(workspace, "database.db"), "runtime");
+  await mkdir(archive, { mode: 0o700 });
 
   const result = await copySessionArtifacts(workspace, archive);
 

@@ -42,6 +42,7 @@ export async function copySessionArtifacts(workspacePath, archivePath) {
       planPath,
       destination,
       fileIdentity(info),
+      { trustedDestinationRoot: archivePath },
     );
     entries.push({
       role: "plan",
