@@ -73,11 +73,13 @@ archive validation, and archive attachment.
    "configuration."
 3. Explain that Stash2D discovers external paths only from user messages and
    structured user attachments. Attachment provenance is not inferred from
-   path-shaped JSON in message text. Model-generated tool arguments, assistant prose, tool
-   output, tracebacks, pasted code, shell transcripts, and quoted Stash2D
-   directory-limit warnings are ignored. Host-injected skill context is also
-   excluded. Mentioned directories are traversed only when the surrounding
-   prose expresses an intent to read, inspect, or include them. It displays
+   path-shaped JSON in message text. Model-generated tool arguments, assistant
+   prose, tool output, subagent messages, and ephemeral events are ignored.
+   Complete user messages are considered, including pasted code and shell
+   transcripts, so unrelated paths may appear as candidates. Nothing is copied
+   until the user explicitly selects it. Mentioned directories are traversed
+   only when the surrounding prose expresses an intent to read, inspect, or
+   include them. It displays
    every candidate in one native multi-select list. Explicitly referenced
    directories appear as grouped candidates with their eligible file count and
    total size. It excludes Git-repository files, Copilot internals, and the

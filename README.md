@@ -39,10 +39,11 @@ Values can also be supplied inline:
 Stash2D may offer to include external files or directories explicitly present
 in user messages or supplied as structured user attachments. Attachment paths
 retain their original provenance instead of being inferred from message text.
-Tool arguments are model-generated
-implementation details and are not treated as archive intent. Paths that only
-appear in assistant prose, tool calls, tool output, tracebacks, pasted code, or
-shell transcripts are ignored. Host-injected skill context is also excluded.
+Tool arguments are model-generated implementation details and are not treated
+as archive intent. Assistant prose, tool output, subagent messages, and
+ephemeral events are ignored. Complete user messages are considered, including
+pasted code and shell transcripts, so unrelated paths may appear as candidates.
+Nothing is copied until the user explicitly selects it.
 Mentioned directories are traversed only when the surrounding user prose
 expresses an intent to read, inspect, or include them. Git-repository files,
 Copilot internals, and the active session workspace are also excluded.
