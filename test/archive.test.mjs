@@ -162,6 +162,28 @@ test("bounds and verifies session artifact copies", async (t) => {
   );
 });
 
+test("counts the copied tree root against its entry limit", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const source = path.join(directory, "source");
+  await writeText(path.join(source, "artifact.txt"), "artifact");
+
+  await assert.rejects(
+    copyTree(source, path.join(directory, "rejected"), {
+      maxEntries: 1,
+    }),
+    /safety limit of 1 entries/,
+  );
+
+  let usage;
+  await copyTree(source, path.join(directory, "accepted"), {
+    maxEntries: 2,
+    onUsage: (value) => {
+      usage = value;
+    },
+  });
+  assert.equal(usage.entries, 2);
+});
+
 test("rejects snapshot attachment path traversal", async (t) => {
   const directory = await temporaryDirectory(t);
   const sourceRoot = path.join(directory, "source");

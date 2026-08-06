@@ -64,7 +64,7 @@ export function remainingSessionTreeBudget(
   );
   return {
     entries:
-      MAX_ARCHIVE_ENTRIES - committed.entries - 1,
+      MAX_ARCHIVE_ENTRIES - committed.entries,
     directories:
       MAX_ARCHIVE_DIRECTORIES - committed.directories,
     bytes: MAX_ARCHIVE_BYTES - committed.bytes,

@@ -129,8 +129,13 @@ export async function copyTree(
   }
   const copied = [];
   let directoryCount = 0;
-  let entryCount = 0;
+  let entryCount = 1;
   let totalBytes = 0;
+  if (entryCount > maxEntries) {
+    throw new Error(
+      `Session artifacts exceed the safety limit of ${maxEntries} entries.`,
+    );
+  }
 
   async function visit(source, destination, relativePath, depth = 0) {
     if (depth > maxDepth) {
@@ -208,7 +213,7 @@ export async function copyTree(
 
   await visit(sourceRoot, destinationRoot, "");
   await onUsage({
-    entries: entryCount + 1,
+    entries: entryCount,
     directories: directoryCount,
     bytes: totalBytes,
   });

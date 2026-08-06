@@ -71,7 +71,7 @@ test("reserves Session.md and the SessionFiles root from traversal limits", () =
       },
     }),
     {
-      entries: 5992,
+      entries: 5993,
       directories: 997,
       bytes: 1073741788,
     },
