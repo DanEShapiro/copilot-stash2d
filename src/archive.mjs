@@ -212,29 +212,57 @@ export async function copyArchiveSnapshotFiles(
   attachments,
 ) {
   const resolvedSourceRoot = path.resolve(sourceRoot);
+  const resolvedDestinationRoot = path.resolve(destinationRoot);
   for (const attachment of attachments) {
     const relativePath = attachment.displayName
       .split("/")
       .join(path.sep);
+    const rawSegments = relativePath.split(path.sep).filter(Boolean);
+    const normalizedRelativePath = path.normalize(relativePath);
+    const normalizedSegments = normalizedRelativePath
+      .split(path.sep)
+      .filter(Boolean);
     if (
       !relativePath ||
-      path.isAbsolute(relativePath) ||
-      relativePath === ".." ||
-      relativePath.startsWith(`..${path.sep}`)
+      rawSegments.some((segment) => segment === "..") ||
+      normalizedSegments.length === 0 ||
+      normalizedSegments.some((segment) => segment === "..") ||
+      path.isAbsolute(normalizedRelativePath)
     ) {
       throw new Error(
         `Archive attachment path is invalid: ${attachment.displayName}`,
       );
     }
-    const expectedSourcePath = path.resolve(resolvedSourceRoot, relativePath);
-    if (path.relative(expectedSourcePath, attachment.path) !== "") {
+    const expectedSourcePath = path.resolve(
+      resolvedSourceRoot,
+      normalizedRelativePath,
+    );
+    if (!isWithinRoot(expectedSourcePath, resolvedSourceRoot)) {
+      throw new Error(
+        `Archive attachment escaped its source directory: ${attachment.displayName}`,
+      );
+    }
+    const resolvedAttachmentPath = path.resolve(attachment.path);
+    if (
+      !isWithinRoot(resolvedAttachmentPath, resolvedSourceRoot) ||
+      path.relative(expectedSourcePath, resolvedAttachmentPath) !== ""
+    ) {
       throw new Error(
         `Archive attachment escaped its source directory: ${attachment.path}`,
       );
     }
+    const destinationPath = path.resolve(
+      resolvedDestinationRoot,
+      normalizedRelativePath,
+    );
+    if (!isWithinRoot(destinationPath, resolvedDestinationRoot)) {
+      throw new Error(
+        `Archive attachment escaped its destination directory: ${attachment.displayName}`,
+      );
+    }
     await copyVerifiedFile(
-      attachment.path,
-      path.join(destinationRoot, relativePath),
+      resolvedAttachmentPath,
+      destinationPath,
       attachment.identity,
     );
   }

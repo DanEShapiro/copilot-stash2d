@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, symlink } from "node:fs/promises";
+import { mkdir, readFile, stat, symlink } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import {
   ARCHIVE_FORMAT_VERSION,
   archiveFolderName,
+  copyArchiveSnapshotFiles,
   copyTree,
   pathExists,
   sanitizeTitle,
@@ -157,6 +158,66 @@ test("bounds and verifies session artifact copies", async (t) => {
   );
   assert.equal(
     await pathExists(path.join(destination, "artifact.txt")),
+    false,
+  );
+});
+
+test("rejects snapshot attachment path traversal", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const sourceRoot = path.join(directory, "source");
+  const destinationRoot = path.join(directory, "snapshot");
+  const sourcePath = path.join(sourceRoot, "Context", "input.txt");
+  await writeText(sourcePath, "input");
+  const info = await stat(sourcePath);
+  const attachment = {
+    path: sourcePath,
+    identity: {
+      device: info.dev,
+      inode: info.ino,
+      byteSize: info.size,
+      mtimeMs: info.mtimeMs,
+    },
+  };
+
+  for (const displayName of [
+    "Context/../../evil.txt",
+    "Context/../evil.txt",
+  ]) {
+    await assert.rejects(
+      copyArchiveSnapshotFiles(sourceRoot, destinationRoot, [
+        { ...attachment, displayName },
+      ]),
+      /Archive attachment path is invalid/,
+    );
+  }
+  assert.equal(await pathExists(path.join(directory, "evil.txt")), false);
+});
+
+test("rejects snapshot source paths outside the archive root", async (t) => {
+  const directory = await temporaryDirectory(t);
+  const sourceRoot = path.join(directory, "source");
+  const destinationRoot = path.join(directory, "snapshot");
+  const outsidePath = path.join(directory, "outside.txt");
+  await writeText(outsidePath, "outside");
+  const info = await stat(outsidePath);
+
+  await assert.rejects(
+    copyArchiveSnapshotFiles(sourceRoot, destinationRoot, [
+      {
+        displayName: "Context/outside.txt",
+        path: outsidePath,
+        identity: {
+          device: info.dev,
+          inode: info.ino,
+          byteSize: info.size,
+          mtimeMs: info.mtimeMs,
+        },
+      },
+    ]),
+    /escaped its source directory/,
+  );
+  assert.equal(
+    await pathExists(path.join(destinationRoot, "Context", "outside.txt")),
     false,
   );
 });
